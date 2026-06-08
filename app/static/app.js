@@ -622,7 +622,7 @@ function renderMerchants(merchants) {
     return `
       <div class="merchant-row ${selected ? 'selected' : ''}">
         <input type="checkbox" class="merchant-check" onchange="toggleMerchant('${esc(m.description)}', this.checked)" ${selected ? 'checked' : ''}>
-        <span class="merchant-name" title="${esc(m.description)}">${esc(m.description)}</span>
+        <button class="merchant-name-btn" onclick="showMerchantTransactions('${esc(m.description)}')" title="View transactions">${esc(m.description)}</button>
         <span class="merchant-count">${m.count}×</span>
         <span class="merchant-total">$${fmt(m.total)}</span>
       </div>`;
@@ -676,6 +676,45 @@ async function applyRename() {
   // Refresh transactions if viewing the same data
   await loadTransactions();
   if (document.getElementById('tab-dashboard').classList.contains('active')) await loadDashboard();
+}
+
+// ---- Merchant transactions modal ----
+
+async function showMerchantTransactions(name) {
+  const data = await api(`/merchants/transactions?name=${encodeURIComponent(name)}&year=${yearState.currentYear}`);
+  const txs = data.transactions;
+  const total = txs.reduce((s, t) => s + t.amount, 0);
+
+  const modal = document.querySelector('#modal-overlay .modal');
+  modal.classList.add('modal-wide');
+  document.querySelector('#modal-overlay .modal h3').textContent = esc(name);
+
+  document.getElementById('modal-body').innerHTML = txs.length === 0
+    ? '<p class="empty">No transactions found.</p>'
+    : `
+      <div class="merchant-tx-summary">${txs.length} transaction${txs.length !== 1 ? 's' : ''} · Total: <strong>$${fmt(total)}</strong></div>
+      <div class="merchant-tx-scroll">
+        <table class="merchant-tx-table">
+          <thead>
+            <tr><th>Date</th><th>Month</th><th>Amount</th><th>Category</th><th>Notes</th></tr>
+          </thead>
+          <tbody>
+            ${txs.map(t => `
+              <tr>
+                <td style="white-space:nowrap">${t.date}</td>
+                <td>${formatMonthShort(t.month_year)}</td>
+                <td class="amount-cell">$${fmt(t.amount)}</td>
+                <td>${esc(t.category)}</td>
+                <td style="color:var(--text-muted)">${esc(t.notes || '')}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+
+  document.querySelector('#modal-overlay .modal-footer').innerHTML =
+    `<button onclick="closeModal()">Close</button>`;
+
+  document.getElementById('modal-overlay').classList.remove('hidden');
 }
 
 // ---- Edit Modal ----
@@ -739,6 +778,11 @@ function openEditModal(id) {
 
 function closeModal() {
   document.getElementById('modal-overlay').classList.add('hidden');
+  document.querySelector('#modal-overlay .modal').classList.remove('modal-wide');
+  document.querySelector('#modal-overlay .modal h3').textContent = 'Edit Transaction';
+  document.querySelector('#modal-overlay .modal-footer').innerHTML =
+    `<button onclick="closeModal()">Cancel</button>
+     <button class="btn-primary" onclick="saveModal()">Save</button>`;
   _editingTxId = null;
 }
 

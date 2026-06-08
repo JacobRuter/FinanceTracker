@@ -436,6 +436,22 @@ def get_annual_summary(year: int) -> dict:
         }
 
 
+def get_merchant_transactions(name: str, year: int | None = None) -> list[dict]:
+    with get_db() as conn:
+        if year:
+            rows = conn.execute(
+                """SELECT * FROM transactions WHERE description = ? AND month_year LIKE ? AND type = 'expense'
+                   ORDER BY date DESC""",
+                (name, f"{year}-%")
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM transactions WHERE description = ? AND type = 'expense' ORDER BY date DESC",
+                (name,)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def rename_merchants(from_names: list[str], to_name: str) -> int:
     with get_db() as conn:
         placeholders = ",".join("?" * len(from_names))

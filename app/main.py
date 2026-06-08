@@ -140,6 +140,11 @@ class MerchantRename(BaseModel):
     to_name: str
 
 
+@app.get("/api/merchants/transactions")
+def merchant_transactions(name: str, year: int = None):
+    return {"transactions": db.get_merchant_transactions(name, year)}
+
+
 @app.post("/api/merchants/rename")
 def rename_merchants(body: MerchantRename):
     count = db.rename_merchants(body.from_names, body.to_name)
