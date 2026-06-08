@@ -367,6 +367,31 @@ tbody td { padding: 9px 14px; vertical-align: middle; }
 .icon-btn.delete:hover { color: var(--red); background: #fee2e2; }
 .icon-btn.edit:hover { color: var(--primary); background: #ede9fe; }
 .action-cell { white-space: nowrap; }
+.bill-excluded-row { opacity: 0.55; }
+.bill-excluded-row:hover { opacity: 0.8; }
+.bill-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 10px;
+  background: #ede9fe;
+  color: var(--primary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+.keyword-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: #ede9fe;
+  color: var(--primary);
+  font-family: monospace;
+}
+.exclude-toggle { font-size: 13px; color: var(--text); margin-top: 4px; }
+.exclude-hint { color: var(--text-muted); font-weight: 400; }
 .empty-row { text-align: center; padding: 40px !important; color: var(--text-muted); }
 .empty { color: var(--text-muted); font-size: 13px; padding: 8px 0; }
 

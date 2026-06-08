@@ -60,6 +60,7 @@ class TransactionUpdate(BaseModel):
     category: str | None = None
     source: str | None = None
     notes: str | None = None
+    exclude_from_spending: int | None = None
 
 
 @app.put("/api/transactions/{tx_id}")
@@ -118,6 +119,11 @@ async def upload_csv(file: UploadFile = File(...), split: bool = False, replace:
     for tx in parsed:
         db.insert_transaction(tx)
 
+    # Auto-apply bill keyword matching for every affected month
+    affected_months = list({tx["month_year"] for tx in parsed})
+    for month in affected_months:
+        db.apply_bill_matching(month)
+
     month_year = max(tx["month_year"] for tx in parsed)
     return {"imported": len(parsed), "month_year": month_year, "source": source, "replaced": replace}
 
@@ -125,6 +131,12 @@ async def upload_csv(file: UploadFile = File(...), split: bool = False, replace:
 @app.post("/api/transactions/{month_year}/split-capital-one")
 def split_capital_one(month_year: str):
     count = db.split_capital_one_transactions(month_year)
+    return {"count": count}
+
+
+@app.post("/api/transactions/{month_year}/apply-bill-matching")
+def apply_bill_matching(month_year: str):
+    count = db.apply_bill_matching(month_year)
     return {"count": count}
 
 
@@ -247,6 +259,7 @@ class BillCreate(BaseModel):
     name: str
     amount: float
     due_day: int | None = None
+    match_keyword: str | None = None
 
 
 @app.get("/api/bills")

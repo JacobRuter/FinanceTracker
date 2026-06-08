@@ -35,7 +35,8 @@ def init_db():
                 source TEXT NOT NULL,
                 month_year TEXT NOT NULL,
                 notes TEXT DEFAULT '',
-                is_split INTEGER NOT NULL DEFAULT 0
+                is_split INTEGER NOT NULL DEFAULT 0,
+                exclude_from_spending INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS bills (
@@ -43,6 +44,7 @@ def init_db():
                 name TEXT NOT NULL,
                 amount REAL NOT NULL,
                 due_day INTEGER,
+                match_keyword TEXT,
                 is_active INTEGER DEFAULT 1
             );
 
@@ -71,6 +73,8 @@ def init_db():
         for stmt in [
             "ALTER TABLE monthly_income ADD COLUMN savings_target REAL NOT NULL DEFAULT 0",
             "ALTER TABLE transactions ADD COLUMN is_split INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE transactions ADD COLUMN exclude_from_spending INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE bills ADD COLUMN match_keyword TEXT",
         ]:
             try:
                 conn.execute(stmt)
@@ -115,7 +119,7 @@ def split_capital_one_transactions(month_year: str) -> int:
 
 
 def update_transaction(tx_id: int, fields: dict):
-    allowed = {"date", "description", "amount", "type", "category", "source", "notes"}
+    allowed = {"date", "description", "amount", "type", "category", "source", "notes", "exclude_from_spending"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return
@@ -156,17 +160,17 @@ def get_dashboard(month_year: str) -> dict:
         month_abbr = date(year, month, 1).strftime('%b')
         today = date.today()
 
-        # Total spending (expenses only)
+        # Total spending (expenses only, excluding bill-matched transactions)
         spending_row = conn.execute(
-            "SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE month_year = ? AND type = 'expense'",
+            "SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE month_year = ? AND type = 'expense' AND exclude_from_spending = 0",
             (month_year,)
         ).fetchone()
         total_spending = spending_row[0]
 
-        # Spending by category (expenses only)
+        # Spending by category (expenses only, excluding bill-matched)
         cat_rows = conn.execute(
             """SELECT category, SUM(amount) as total FROM transactions
-               WHERE month_year = ? AND type = 'expense'
+               WHERE month_year = ? AND type = 'expense' AND exclude_from_spending = 0
                GROUP BY category ORDER BY total DESC""",
             (month_year,)
         ).fetchall()
@@ -224,7 +228,7 @@ def get_dashboard(month_year: str) -> dict:
 
         # Weekly breakdown
         tx_rows = conn.execute(
-            "SELECT date, amount FROM transactions WHERE month_year = ? AND type = 'expense'",
+            "SELECT date, amount FROM transactions WHERE month_year = ? AND type = 'expense' AND exclude_from_spending = 0",
             (month_year,)
         ).fetchall()
         tx_by_date: dict[str, float] = {}
@@ -298,10 +302,38 @@ def get_bills() -> list[dict]:
 def insert_bill(bill: dict) -> int:
     with get_db() as conn:
         cur = conn.execute(
-            "INSERT INTO bills (name, amount, due_day) VALUES (:name, :amount, :due_day)",
+            "INSERT INTO bills (name, amount, due_day, match_keyword) VALUES (:name, :amount, :due_day, :match_keyword)",
             bill
         )
         return cur.lastrowid
+
+
+def apply_bill_matching(month_year: str) -> int:
+    with get_db() as conn:
+        bill_rows = conn.execute(
+            "SELECT match_keyword FROM bills WHERE is_active = 1 AND match_keyword IS NOT NULL AND TRIM(match_keyword) != ''"
+        ).fetchall()
+        if not bill_rows:
+            return 0
+        keywords = [r["match_keyword"].lower().strip() for r in bill_rows]
+
+        tx_rows = conn.execute(
+            "SELECT id, description FROM transactions WHERE month_year = ? AND type = 'expense'",
+            (month_year,)
+        ).fetchall()
+
+        count = 0
+        for tx in tx_rows:
+            desc_lower = tx["description"].lower()
+            matched = any(kw in desc_lower for kw in keywords)
+            new_val = 1 if matched else 0
+            conn.execute(
+                "UPDATE transactions SET exclude_from_spending = ? WHERE id = ?",
+                (new_val, tx["id"])
+            )
+            if matched:
+                count += 1
+        return count
 
 
 def delete_bill(bill_id: int):
@@ -365,10 +397,10 @@ def get_annual_summary(year: int) -> dict:
         default_income = _setting("default_income")
         default_savings = _setting("default_savings")
 
-        # Spending per month
+        # Spending per month (excluding bill-matched)
         spending_rows = conn.execute(
             """SELECT month_year, ROUND(SUM(amount), 2) as spending
-               FROM transactions WHERE month_year LIKE ? AND type='expense'
+               FROM transactions WHERE month_year LIKE ? AND type='expense' AND exclude_from_spending = 0
                GROUP BY month_year""",
             (year_prefix,)
         ).fetchall()
@@ -416,10 +448,10 @@ def get_annual_summary(year: int) -> dict:
                 totals["savings"] += savings
                 totals["net"] += net
 
-        # Merchants (all expense transactions for the year)
+        # Merchants (expense transactions for the year, excluding bill-matched)
         merchant_rows = conn.execute(
             """SELECT description, COUNT(*) as count, ROUND(SUM(amount), 2) as total
-               FROM transactions WHERE month_year LIKE ? AND type='expense'
+               FROM transactions WHERE month_year LIKE ? AND type='expense' AND exclude_from_spending = 0
                GROUP BY description ORDER BY total DESC""",
             (year_prefix,)
         ).fetchall()

@@ -258,9 +258,15 @@ async function loadTransactions() {
     updateCategoryFilter();
     updateApplySplitButton();
     updateBulkDeleteButton();
+    updateApplyMatchingButton();
   } catch (e) {
     console.error('Transactions:', e);
   }
+}
+
+function updateApplyMatchingButton() {
+  const hasBillKeywords = state.bills.some(b => b.match_keyword);
+  document.getElementById('apply-matching-btn').classList.toggle('hidden', !hasBillKeywords);
 }
 
 function filterTransactions() {
@@ -301,8 +307,14 @@ function renderTransactions() {
 
   tbody.innerHTML = state.transactions.map(t => {
     const checked = state.selectedIds.has(t.id);
+    const excluded = t.exclude_from_spending;
+    const rowClass = [
+      t.type === 'payment' ? 'payment-row' : '',
+      excluded ? 'bill-excluded-row' : '',
+      checked ? 'selected-row' : '',
+    ].filter(Boolean).join(' ');
     return `
-    <tr class="${t.type === 'payment' ? 'payment-row' : ''} ${checked ? 'selected-row' : ''}">
+    <tr class="${rowClass}">
       <td><input type="checkbox" class="row-check" onchange="toggleRowSelect(${t.id}, this.checked)" ${checked ? 'checked' : ''}></td>
       <td style="white-space:nowrap">${t.date}</td>
       <td class="desc-cell" title="${esc(t.description)}">${esc(t.description)}</td>
@@ -312,7 +324,10 @@ function renderTransactions() {
           ${categoryOptions(t.category)}
         </select>
       </td>
-      <td><span class="source-badge ${t.source}">${t.source.replace('_', ' ')}</span></td>
+      <td>
+        <span class="source-badge ${t.source}">${t.source.replace('_', ' ')}</span>
+        ${excluded ? '<span class="bill-badge" title="Excluded from spending — counted in Bills">Bill</span>' : ''}
+      </td>
       <td><input class="notes-input" type="text" value="${esc(t.notes || '')}" onblur="updateNotes(${t.id}, this.value)" placeholder="Add note…"></td>
       <td class="action-cell">
         <button class="icon-btn edit" onclick="openEditModal(${t.id})" title="Edit">✎</button>
@@ -455,6 +470,7 @@ async function loadBills() {
   const data = await api('/bills');
   state.bills = data.bills;
   renderBillsSettings();
+  updateApplyMatchingButton();
 }
 
 function renderBillsSettings() {
@@ -465,6 +481,7 @@ function renderBillsSettings() {
       <span class="bill-name">${esc(b.name)}</span>
       <span class="bill-amount">$${fmt(b.amount)}</span>
       ${b.due_day ? `<span class="bill-due">due ${b.due_day}${ordinal(b.due_day)}</span>` : ''}
+      ${b.match_keyword ? `<span class="keyword-badge" title="Transactions matching this keyword are excluded from spending">${esc(b.match_keyword)}</span>` : ''}
       <button class="icon-btn delete" onclick="deleteBill(${b.id})">×</button>
     </div>
   `).join('');
@@ -473,12 +490,27 @@ function renderBillsSettings() {
 async function addBill(e) {
   e.preventDefault();
   const form = e.target;
-  const body = { name: form.name.value.trim(), amount: parseFloat(form.amount.value), due_day: form.due_day.value ? parseInt(form.due_day.value) : null };
+  const body = {
+    name: form.name.value.trim(),
+    amount: parseFloat(form.amount.value),
+    due_day: form.due_day.value ? parseInt(form.due_day.value) : null,
+    match_keyword: form.match_keyword.value.trim() || null,
+  };
   await api('/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   form.reset();
   await loadBills();
+  // If a keyword was set, re-apply matching for current month
+  if (body.match_keyword) {
+    await applyBillMatching(true);
+  }
   await loadDashboard();
-  toast(`Bill "${body.name}" added`);
+  toast(`Bill "${body.name}" added${body.match_keyword ? ` · matching "${body.match_keyword}"` : ''}`);
+}
+
+async function applyBillMatching(silent = false) {
+  const data = await api(`/transactions/${state.currentMonth}/apply-bill-matching`, { method: 'POST' });
+  await Promise.all([loadTransactions(), loadDashboard()]);
+  if (!silent) toast(`Bill matching applied · ${data.count} transaction${data.count !== 1 ? 's' : ''} excluded`);
 }
 
 async function deleteBill(id) {
@@ -769,6 +801,12 @@ function openEditModal(id) {
           <input type="text" id="edit-notes" value="${esc(tx.notes || '')}" placeholder="Optional note">
         </div>
       </div>
+      <div class="edit-row">
+        <label class="toggle-label exclude-toggle">
+          <input type="checkbox" id="edit-exclude" ${tx.exclude_from_spending ? 'checked' : ''}>
+          Exclude from spending <span class="exclude-hint">(already counted in Bills — won't be added to your spending total)</span>
+        </label>
+      </div>
     </div>
   `;
 
@@ -796,6 +834,7 @@ async function saveModal() {
     category: document.getElementById('edit-category').value,
     source: document.getElementById('edit-source').value,
     notes: document.getElementById('edit-notes').value.trim(),
+    exclude_from_spending: document.getElementById('edit-exclude').checked ? 1 : 0,
   };
   if (!fields.date || !fields.description || isNaN(fields.amount) || fields.amount < 0) {
     toast('Please fill in date, description, and a valid amount', true);

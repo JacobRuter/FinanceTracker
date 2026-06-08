@@ -66,6 +66,9 @@
         <button id="apply-split-btn" class="apply-split-btn hidden" onclick="applyCapOneSplit()">
           Apply split to this month
         </button>
+        <button id="apply-matching-btn" class="apply-split-btn hidden" onclick="applyBillMatching()">
+          Re-apply bill matching
+        </button>
         <div class="toolbar-divider"></div>
         <select id="category-filter" onchange="filterTransactions()">
           <option value="">All Categories</option>
@@ -149,11 +152,14 @@
           <form id="add-bill-form" onsubmit="addBill(event)">
             <h3>Add Bill</h3>
             <div class="form-row">
-              <input type="text" name="name" placeholder="Bill name (e.g. Rent)" required>
+              <input type="text" name="name" placeholder="Bill name (e.g. Netflix)" required>
             </div>
             <div class="form-row two-input">
               <input type="number" name="amount" placeholder="Amount" step="0.01" min="0" required>
               <input type="number" name="due_day" placeholder="Due day (optional)" min="1" max="31">
+            </div>
+            <div class="form-row">
+              <input type="text" name="match_keyword" placeholder="Statement keyword (e.g. NETFLIX) — excludes matching transactions from spending">
             </div>
             <button type="submit" class="btn-primary">Add Bill</button>
           </form>
