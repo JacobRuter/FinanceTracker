@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Finance Tracker</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <h1>Finance Tracker</h1>
+      <nav>
+        <button class="tab-btn active" data-tab="dashboard" onclick="showTab('dashboard')">Dashboard</button>
+        <button class="tab-btn" data-tab="transactions" onclick="showTab('transactions')">Transactions</button>
+        <button class="tab-btn" data-tab="year" onclick="showTab('year')">Year</button>
+        <button class="tab-btn" data-tab="settings" onclick="showTab('settings')">Settings</button>
+      </nav>
+    </div>
+  </header>
+
+  <div id="month-bar" class="month-bar">
+    <button class="nav-btn" onclick="prevMonth()">&#8249;</button>
+    <select id="month-select" onchange="onMonthChange(this.value)"></select>
+    <button class="nav-btn" onclick="nextMonth()">&#8250;</button>
+  </div>
+
+  <main>
+
+    <!-- DASHBOARD TAB -->
+    <section id="tab-dashboard" class="tab-content active">
+      <div id="summary-cards" class="summary-cards"></div>
+      <div class="dashboard-grid">
+        <div class="card">
+          <h2>Bills</h2>
+          <div id="bills-dashboard"></div>
+        </div>
+        <div class="right-stack">
+          <div class="card">
+            <h2>Weekly Budget</h2>
+            <div id="weekly-breakdown"></div>
+          </div>
+          <div class="card">
+            <h2>Spending by Category</h2>
+            <div id="category-chart"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TRANSACTIONS TAB -->
+    <section id="tab-transactions" class="tab-content">
+      <div class="toolbar">
+        <label class="upload-btn">
+          + Upload CSV
+          <input type="file" accept=".csv" id="csv-upload" onchange="handleCSVUpload(this)">
+        </label>
+        <label class="toggle-label split-toggle" title="Halves Capital One expense amounts on import">
+          <input type="checkbox" id="split-capone" onchange="onSplitToggle(this.checked)">
+          Split Cap One 50/50
+        </label>
+        <label class="toggle-label replace-toggle" title="Deletes existing transactions for that source+month before importing">
+          <input type="checkbox" id="replace-upload">
+          Replace existing
+        </label>
+        <button id="apply-split-btn" class="apply-split-btn hidden" onclick="applyCapOneSplit()">
+          Apply split to this month
+        </button>
+        <div class="toolbar-divider"></div>
+        <select id="category-filter" onchange="filterTransactions()">
+          <option value="">All Categories</option>
+        </select>
+        <label class="toggle-label">
+          <input type="checkbox" id="hide-payments" onchange="filterTransactions()" checked>
+          Hide payments
+        </label>
+        <div class="toolbar-divider"></div>
+        <button id="bulk-delete-btn" class="bulk-delete-btn hidden" onclick="deleteSelected()">
+          Delete selected (<span id="bulk-count">0</span>)
+        </button>
+        <span id="tx-count" class="tx-count"></span>
+      </div>
+      <div class="card table-card">
+        <table id="transactions-table">
+          <thead>
+            <tr>
+              <th><input type="checkbox" id="select-all" onchange="toggleSelectAll(this.checked)" title="Select all"></th>
+              <th>Date</th>
+              <th>Description</th>
+              <th>Amount</th>
+              <th>Category</th>
+              <th>Source</th>
+              <th>Notes</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="transactions-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- YEAR TAB -->
+    <section id="tab-year" class="tab-content">
+      <div class="year-nav">
+        <button class="nav-btn" onclick="prevYear()">&#8249;</button>
+        <span id="year-display" class="year-display">2026</span>
+        <button class="nav-btn" onclick="nextYear()">&#8250;</button>
+      </div>
+      <div id="year-summary-cards" class="summary-cards"></div>
+      <div class="two-col year-grid">
+        <div class="card">
+          <h2>Monthly Breakdown</h2>
+          <table id="year-monthly-table" class="year-table">
+            <thead>
+              <tr>
+                <th>Month</th>
+                <th>Income</th>
+                <th>Spending</th>
+                <th>Bills</th>
+                <th>Savings</th>
+                <th>Net</th>
+              </tr>
+            </thead>
+            <tbody id="year-monthly-body"></tbody>
+          </table>
+        </div>
+        <div class="card">
+          <h2>Merchants</h2>
+          <div class="merchant-toolbar">
+            <input type="text" id="merchant-search" class="merchant-search" placeholder="Search merchants…" oninput="filterMerchants()">
+            <div id="rename-bar" class="rename-bar hidden">
+              <span id="selected-merchant-count"></span>
+              <input type="text" id="rename-input" placeholder="Rename to…">
+              <button class="btn-primary" onclick="applyRename()">Rename</button>
+              <button class="btn-ghost" onclick="clearMerchantSelection()">Clear</button>
+            </div>
+          </div>
+          <div id="merchant-list" class="merchant-list"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SETTINGS TAB -->
+    <section id="tab-settings" class="tab-content">
+      <div class="two-col">
+        <div class="card">
+          <h2>Recurring Bills</h2>
+          <div id="bills-list"></div>
+          <form id="add-bill-form" onsubmit="addBill(event)">
+            <h3>Add Bill</h3>
+            <div class="form-row">
+              <input type="text" name="name" placeholder="Bill name (e.g. Rent)" required>
+            </div>
+            <div class="form-row two-input">
+              <input type="number" name="amount" placeholder="Amount" step="0.01" min="0" required>
+              <input type="number" name="due_day" placeholder="Due day (optional)" min="1" max="31">
+            </div>
+            <button type="submit" class="btn-primary">Add Bill</button>
+          </form>
+        </div>
+        <div class="card">
+          <h2>Defaults</h2>
+          <p class="help-text">Set defaults for all months. Override per month on the Dashboard.</p>
+          <label class="settings-label">Monthly Income</label>
+          <div class="form-row two-input">
+            <input type="number" id="default-income" placeholder="e.g. 5000" step="0.01" min="0">
+            <button class="btn-primary" onclick="saveDefaultIncome()">Save</button>
+          </div>
+          <label class="settings-label">Monthly Savings Goal</label>
+          <div class="form-row two-input">
+            <input type="number" id="default-savings" placeholder="e.g. 500" step="0.01" min="0">
+            <button class="btn-primary" onclick="saveDefaultSavings()">Save</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Edit transaction modal -->
+  <div id="modal-overlay" class="modal-overlay hidden" onclick="closeModal()">
+    <div class="modal" onclick="event.stopPropagation()">
+      <h3>Edit Transaction</h3>
+      <div id="modal-body"></div>
+      <div class="modal-footer">
+        <button onclick="closeModal()">Cancel</button>
+        <button class="btn-primary" onclick="saveModal()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
