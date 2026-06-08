@@ -315,7 +315,13 @@ def apply_bill_matching(month_year: str) -> int:
         ).fetchall()
         if not bill_rows:
             return 0
-        keywords = [r["match_keyword"].lower().strip() for r in bill_rows]
+        # Each bill can have comma-separated keywords e.g. "NETFLIX, NETFLIX.COM"
+        keywords = [
+            kw.strip().lower()
+            for r in bill_rows
+            for kw in r["match_keyword"].split(",")
+            if kw.strip()
+        ]
 
         tx_rows = conn.execute(
             "SELECT id, description FROM transactions WHERE month_year = ? AND type = 'expense'",
