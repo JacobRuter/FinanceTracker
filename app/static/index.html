@@ -88,11 +88,11 @@
           <thead>
             <tr>
               <th><input type="checkbox" id="select-all" onchange="toggleSelectAll(this.checked)" title="Select all"></th>
-              <th>Date</th>
-              <th>Description</th>
-              <th>Amount</th>
-              <th>Category</th>
-              <th>Source</th>
+              <th class="sortable" onclick="sortBy('date')">Date <span class="sort-icon" id="sort-date"></span></th>
+              <th class="sortable" onclick="sortBy('description')">Description <span class="sort-icon" id="sort-description"></span></th>
+              <th class="sortable" onclick="sortBy('amount')">Amount <span class="sort-icon" id="sort-amount"></span></th>
+              <th class="sortable" onclick="sortBy('category')">Category <span class="sort-icon" id="sort-category"></span></th>
+              <th class="sortable" onclick="sortBy('source')">Source <span class="sort-icon" id="sort-source"></span></th>
               <th>Notes</th>
               <th></th>
             </tr>

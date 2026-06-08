@@ -318,6 +318,9 @@ thead th {
 }
 tbody tr { border-bottom: 1px solid var(--bg); }
 tbody tr:hover { background: #fafbff; }
+thead th.sortable { cursor: pointer; user-select: none; }
+thead th.sortable:hover { color: var(--primary); }
+.sort-icon { font-size: 10px; color: var(--primary); margin-left: 2px; }
 tbody tr.payment-row { opacity: 0.55; }
 tbody td { padding: 9px 14px; vertical-align: middle; }
 .desc-cell { max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

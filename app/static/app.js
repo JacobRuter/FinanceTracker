@@ -13,6 +13,11 @@ const state = {
   selectedIds: new Set(),
 };
 
+const sortState = {
+  column: 'date',
+  direction: 'desc',
+};
+
 const yearState = {
   currentYear: new Date().getFullYear(),
   data: null,
@@ -288,6 +293,41 @@ function updateCategoryFilter() {
     cats.map(c => `<option value="${esc(c)}" ${c === current ? 'selected' : ''}>${esc(c)}</option>`).join('');
 }
 
+// ---- Sorting ----
+
+function sortBy(column) {
+  if (sortState.column === column) {
+    sortState.direction = sortState.direction === 'asc' ? 'desc' : 'asc';
+  } else {
+    sortState.column = column;
+    // Dates and amounts default to descending; text columns default to ascending
+    sortState.direction = (column === 'date' || column === 'amount') ? 'desc' : 'asc';
+  }
+  renderTransactions();
+}
+
+function sortTransactions(txs) {
+  const { column, direction } = sortState;
+  const mult = direction === 'asc' ? 1 : -1;
+  return [...txs].sort((a, b) => {
+    const va = column === 'amount' ? a[column] : String(a[column] ?? '').toLowerCase();
+    const vb = column === 'amount' ? b[column] : String(b[column] ?? '').toLowerCase();
+    if (va < vb) return -1 * mult;
+    if (va > vb) return  1 * mult;
+    return 0;
+  });
+}
+
+function updateSortIndicators() {
+  ['date', 'description', 'amount', 'category', 'source'].forEach(col => {
+    const el = document.getElementById(`sort-${col}`);
+    if (!el) return;
+    el.textContent = sortState.column === col
+      ? (sortState.direction === 'asc' ? '▲' : '▼')
+      : '';
+  });
+}
+
 const _txMap = {};
 
 function renderTransactions() {
@@ -305,7 +345,10 @@ function renderTransactions() {
   const expenses = state.transactions.filter(t => t.type === 'expense');
   countEl.textContent = `${expenses.length} expense${expenses.length !== 1 ? 's' : ''}`;
 
-  tbody.innerHTML = state.transactions.map(t => {
+  updateSortIndicators();
+  const sorted = sortTransactions(state.transactions);
+
+  tbody.innerHTML = sorted.map(t => {
     const checked = state.selectedIds.has(t.id);
     const excluded = t.exclude_from_spending;
     const rowClass = [
