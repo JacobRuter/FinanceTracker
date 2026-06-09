@@ -52,6 +52,26 @@ def list_transactions(month_year: str):
     return {"transactions": db.get_transactions(month_year)}
 
 
+class TransactionCreate(BaseModel):
+    date: str
+    description: str
+    amount: float
+    type: str = 'expense'
+    category: str = 'Uncategorized'
+    source: str = 'manual'
+    notes: str = ''
+
+
+@app.post("/api/transactions")
+def create_transaction(body: TransactionCreate):
+    month_year = body.date[:7]
+    tx = {**body.model_dump(), 'month_year': month_year, 'is_split': 0}
+    tx_id = db.insert_transaction(tx)
+    db.apply_bill_matching(month_year)
+    db.apply_category_rules(month_year)
+    return {"id": tx_id, "month_year": month_year}
+
+
 class TransactionUpdate(BaseModel):
     date: str | None = None
     description: str | None = None
@@ -119,10 +139,11 @@ async def upload_csv(file: UploadFile = File(...), split: bool = False, replace:
     for tx in parsed:
         db.insert_transaction(tx)
 
-    # Auto-apply bill keyword matching for every affected month
+    # Auto-apply bill keyword matching and category rules for every affected month
     affected_months = list({tx["month_year"] for tx in parsed})
     for month in affected_months:
         db.apply_bill_matching(month)
+        db.apply_category_rules(month)
 
     month_year = max(tx["month_year"] for tx in parsed)
     return {"imported": len(parsed), "month_year": month_year, "source": source, "replaced": replace}
@@ -137,6 +158,12 @@ def split_capital_one(month_year: str):
 @app.post("/api/transactions/{month_year}/apply-bill-matching")
 def apply_bill_matching(month_year: str):
     count = db.apply_bill_matching(month_year)
+    return {"count": count}
+
+
+@app.post("/api/transactions/{month_year}/apply-category-rules")
+def apply_category_rules(month_year: str):
+    count = db.apply_category_rules(month_year)
     return {"count": count}
 
 
@@ -251,6 +278,30 @@ def parse_capital_one(row: dict) -> dict | None:
         }
     except (ValueError, KeyError):
         return None
+
+
+# --- Category Rules ---
+
+@app.get("/api/category-rules")
+def list_category_rules():
+    return {"rules": db.get_category_rules()}
+
+
+class CategoryRuleCreate(BaseModel):
+    keyword: str
+    category: str
+
+
+@app.post("/api/category-rules")
+def create_category_rule(body: CategoryRuleCreate):
+    rule_id = db.insert_category_rule(body.keyword, body.category)
+    return {"id": rule_id}
+
+
+@app.delete("/api/category-rules/{rule_id}")
+def remove_category_rule(rule_id: int):
+    db.delete_category_rule(rule_id)
+    return {"ok": True}
 
 
 # --- Bills ---

@@ -66,6 +66,12 @@ def init_db():
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS category_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                keyword TEXT NOT NULL UNIQUE,
+                category TEXT NOT NULL
+            );
         """)
 
     # Migrations for existing databases
@@ -80,6 +86,13 @@ def init_db():
                 conn.execute(stmt)
             except Exception:
                 pass  # column already exists
+
+    # Seed default category rules
+    with get_db() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO category_rules (keyword, category) VALUES (?, ?)",
+            ("kroger", "Groceries")
+        )
 
 
 # --- Transactions ---
@@ -507,6 +520,51 @@ def delete_source_month_transactions(source: str, months: list[str]):
             f"DELETE FROM transactions WHERE source = ? AND month_year IN ({placeholders})",
             [source, *months]
         )
+
+
+# --- Category Rules ---
+
+def get_category_rules() -> list[dict]:
+    with get_db() as conn:
+        rows = conn.execute("SELECT * FROM category_rules ORDER BY keyword").fetchall()
+        return [dict(r) for r in rows]
+
+
+def insert_category_rule(keyword: str, category: str) -> int:
+    with get_db() as conn:
+        cur = conn.execute(
+            "INSERT INTO category_rules (keyword, category) VALUES (?, ?)",
+            (keyword.lower().strip(), category)
+        )
+        return cur.lastrowid
+
+
+def delete_category_rule(rule_id: int):
+    with get_db() as conn:
+        conn.execute("DELETE FROM category_rules WHERE id = ?", (rule_id,))
+
+
+def apply_category_rules(month_year: str) -> int:
+    with get_db() as conn:
+        rules = conn.execute("SELECT keyword, category FROM category_rules").fetchall()
+        if not rules:
+            return 0
+        tx_rows = conn.execute(
+            "SELECT id, description FROM transactions WHERE month_year = ?",
+            (month_year,)
+        ).fetchall()
+        count = 0
+        for tx in tx_rows:
+            desc_lower = tx["description"].lower()
+            for rule in rules:
+                if rule["keyword"] in desc_lower:
+                    conn.execute(
+                        "UPDATE transactions SET category = ? WHERE id = ?",
+                        (rule["category"], tx["id"])
+                    )
+                    count += 1
+                    break
+        return count
 
 
 # --- Settings ---

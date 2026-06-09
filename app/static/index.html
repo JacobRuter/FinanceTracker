@@ -55,6 +55,7 @@
           + Upload CSV
           <input type="file" accept=".csv" id="csv-upload" onchange="handleCSVUpload(this)">
         </label>
+        <button class="upload-btn" onclick="openAddModal()">+ Add Transaction</button>
         <label class="toggle-label split-toggle" title="Halves Capital One expense amounts on import">
           <input type="checkbox" id="split-capone" onchange="onSplitToggle(this.checked)">
           Split Cap One 50/50
@@ -178,6 +179,19 @@
             <button class="btn-primary" onclick="saveDefaultSavings()">Save</button>
           </div>
         </div>
+      </div>
+      <div class="card" style="margin-top:1rem">
+        <h2>Category Rules</h2>
+        <p class="help-text">Automatically assign a category to any transaction whose description contains a keyword. Applied on import.</p>
+        <div id="category-rules-list"></div>
+        <form id="add-category-rule-form" onsubmit="addCategoryRule(event)">
+          <h3>Add Rule</h3>
+          <div class="form-row two-input">
+            <input type="text" name="keyword" placeholder="Keyword (e.g. kroger)" required>
+            <select id="rule-category-select" name="category" required></select>
+          </div>
+          <button type="submit" class="btn-primary">Add Rule</button>
+        </form>
       </div>
     </section>
 

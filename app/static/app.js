@@ -9,6 +9,7 @@ const state = {
   allTransactions: [],
   transactions: [],
   bills: [],
+  categoryRules: [],
   dashboard: null,
   selectedIds: new Set(),
 };
@@ -34,7 +35,7 @@ function getCurrentMonth() {
 
 document.addEventListener('DOMContentLoaded', async () => {
   await loadMonths();
-  await Promise.all([loadDashboard(), loadTransactions(), loadBills(), loadDefaultSettings()]);
+  await Promise.all([loadDashboard(), loadTransactions(), loadBills(), loadDefaultSettings(), loadCategoryRules()]);
 });
 
 // ---- Tabs ----
@@ -179,7 +180,7 @@ function renderDashboard() {
   } else {
     const max = Math.max(...d.categories.map(c => c.amount));
     chartEl.innerHTML = d.categories.map(c => `
-      <div class="chart-row">
+      <div class="chart-row chart-row-clickable" data-category="${esc(c.category)}" onclick="showCategoryTransactions(this.dataset.category)">
         <div class="chart-label" title="${esc(c.category)}">${esc(c.category)}</div>
         <div class="chart-bar-wrap"><div class="chart-bar" style="width:${(c.amount / max * 100).toFixed(1)}%"></div></div>
         <div class="chart-amount">$${fmt(c.amount)}</div>
@@ -563,6 +564,56 @@ async function deleteBill(id) {
   await loadDashboard();
 }
 
+// ---- Category Rules ----
+
+async function loadCategoryRules() {
+  const data = await api('/category-rules');
+  state.categoryRules = data.rules;
+  renderCategoryRules();
+  const sel = document.getElementById('rule-category-select');
+  if (sel && !sel.options.length) {
+    sel.innerHTML = '<option value="">— Category —</option>' +
+      CATEGORIES.map(c => `<option value="${c}">${esc(c)}</option>`).join('');
+  }
+}
+
+function renderCategoryRules() {
+  const el = document.getElementById('category-rules-list');
+  if (!state.categoryRules || !state.categoryRules.length) {
+    el.innerHTML = '<p class="empty">No rules yet.</p>';
+    return;
+  }
+  el.innerHTML = state.categoryRules.map(r => `
+    <div class="bill-item">
+      <span class="bill-name">${esc(r.keyword)}</span>
+      <span class="bill-amount">${esc(r.category)}</span>
+      <button class="icon-btn delete" onclick="deleteCategoryRule(${r.id})">×</button>
+    </div>
+  `).join('');
+}
+
+async function addCategoryRule(e) {
+  e.preventDefault();
+  const form = e.target;
+  const keyword = form.keyword.value.trim();
+  const category = form.category.value;
+  if (!keyword || !category) return;
+  await api('/category-rules', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ keyword, category }),
+  });
+  form.reset();
+  await loadCategoryRules();
+  toast(`Rule added: "${keyword}" → ${category}`);
+}
+
+async function deleteCategoryRule(id) {
+  if (!confirm('Delete this rule?')) return;
+  await api(`/category-rules/${id}`, { method: 'DELETE' });
+  await loadCategoryRules();
+}
+
 // ---- Settings ----
 
 async function loadDefaultSettings() {
@@ -792,9 +843,111 @@ async function showMerchantTransactions(name) {
   document.getElementById('modal-overlay').classList.remove('hidden');
 }
 
+// ---- Category transactions modal ----
+
+function showCategoryTransactions(category) {
+  const txs = state.allTransactions.filter(t => t.category === category && t.type === 'expense');
+  const total = txs.reduce((s, t) => s + t.amount, 0);
+
+  const modal = document.querySelector('#modal-overlay .modal');
+  modal.classList.add('modal-wide');
+  document.querySelector('#modal-overlay .modal h3').textContent = category;
+
+  document.getElementById('modal-body').innerHTML = txs.length === 0
+    ? '<p class="empty">No transactions in this category.</p>'
+    : `
+      <div class="merchant-tx-summary">${txs.length} transaction${txs.length !== 1 ? 's' : ''} · Total: <strong>$${fmt(total)}</strong></div>
+      <div class="merchant-tx-scroll">
+        <table class="merchant-tx-table">
+          <thead>
+            <tr><th>Date</th><th>Description</th><th>Amount</th><th>Notes</th></tr>
+          </thead>
+          <tbody>
+            ${txs.sort((a, b) => b.date.localeCompare(a.date)).map(t => `
+              <tr>
+                <td style="white-space:nowrap">${t.date}</td>
+                <td>${esc(t.description)}</td>
+                <td class="amount-cell">$${fmt(t.amount)}</td>
+                <td style="color:var(--text-muted)">${esc(t.notes || '')}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+
+  document.querySelector('#modal-overlay .modal-footer').innerHTML =
+    `<button onclick="closeModal()">Close</button>`;
+
+  document.getElementById('modal-overlay').classList.remove('hidden');
+}
+
 // ---- Edit Modal ----
 
 let _editingTxId = null;
+
+function openAddModal() {
+  _editingTxId = 'new';
+  const today = new Date().toISOString().slice(0, 10);
+
+  document.querySelector('#modal-overlay .modal h3').textContent = 'Add Transaction';
+  document.getElementById('modal-body').innerHTML = `
+    <div class="edit-form">
+      <div class="edit-row-two">
+        <div>
+          <label class="settings-label">Date</label>
+          <input type="date" id="edit-date" value="${today}">
+        </div>
+        <div>
+          <label class="settings-label">Type</label>
+          <select id="edit-type" class="edit-select">
+            <option value="expense" selected>Expense</option>
+            <option value="payment">Payment / Credit</option>
+          </select>
+        </div>
+      </div>
+      <div class="edit-row">
+        <label class="settings-label">Description</label>
+        <input type="text" id="edit-description" value="" placeholder="Merchant or description">
+      </div>
+      <div class="edit-row-two">
+        <div>
+          <label class="settings-label">Amount ($)</label>
+          <input type="number" id="edit-amount" value="" step="0.01" min="0" placeholder="0.00">
+        </div>
+        <div>
+          <label class="settings-label">Category</label>
+          <select id="edit-category" class="edit-select">${categoryOptions('Uncategorized')}</select>
+        </div>
+      </div>
+      <div class="edit-row-two">
+        <div>
+          <label class="settings-label">Source</label>
+          <select id="edit-source" class="edit-select">
+            <option value="manual" selected>Manual</option>
+            <option value="capital_one">Capital One</option>
+            <option value="chase">Chase</option>
+          </select>
+        </div>
+        <div>
+          <label class="settings-label">Notes</label>
+          <input type="text" id="edit-notes" value="" placeholder="Optional note">
+        </div>
+      </div>
+      <div class="edit-row">
+        <label class="toggle-label exclude-toggle">
+          <input type="checkbox" id="edit-exclude">
+          Exclude from spending <span class="exclude-hint">(already counted in Bills — won't be added to your spending total)</span>
+        </label>
+      </div>
+    </div>
+  `;
+
+  document.querySelector('#modal-overlay .modal-footer').innerHTML =
+    `<button onclick="closeModal()">Cancel</button>
+     <button class="btn-primary" onclick="saveModal()">Add</button>`;
+
+  document.getElementById('modal-overlay').classList.remove('hidden');
+  document.getElementById('edit-description').focus();
+}
 
 function openEditModal(id) {
   const tx = _txMap[id];
@@ -884,19 +1037,31 @@ async function saveModal() {
     return;
   }
   try {
-    await api(`/transactions/${_editingTxId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fields) });
-    const newMonth = fields.date.slice(0, 7);
-    if (newMonth !== state.currentMonth) {
-      state.allTransactions = state.allTransactions.filter(t => t.id !== _editingTxId);
+    if (_editingTxId === 'new') {
+      const res = await api('/transactions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fields) });
+      const newMonth = fields.date.slice(0, 7);
+      if (newMonth === state.currentMonth) {
+        await loadTransactions();
+      } else {
+        ensureMonthOption(newMonth);
+      }
+      await loadDashboard();
+      toast('Transaction added');
     } else {
-      const tx = state.allTransactions.find(t => t.id === _editingTxId);
-      if (tx) Object.assign(tx, fields);
+      await api(`/transactions/${_editingTxId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fields) });
+      const newMonth = fields.date.slice(0, 7);
+      if (newMonth !== state.currentMonth) {
+        state.allTransactions = state.allTransactions.filter(t => t.id !== _editingTxId);
+      } else {
+        const tx = state.allTransactions.find(t => t.id === _editingTxId);
+        if (tx) Object.assign(tx, fields);
+      }
+      filterTransactions();
+      updateCategoryFilter();
+      updateApplySplitButton();
+      await loadDashboard();
+      toast('Transaction updated');
     }
-    filterTransactions();
-    updateCategoryFilter();
-    updateApplySplitButton();
-    await loadDashboard();
-    toast('Transaction updated');
     closeModal();
   } catch (e) {
     toast(e.message, true);

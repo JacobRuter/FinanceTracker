@@ -215,6 +215,15 @@ main {
   gap: 10px;
   margin-bottom: 10px;
 }
+.chart-row-clickable {
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 2px 4px;
+  margin-left: -4px;
+}
+.chart-row-clickable:hover {
+  background: var(--bg);
+}
 .chart-label {
   width: 130px;
   font-size: 13px;
