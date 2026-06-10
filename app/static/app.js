@@ -526,9 +526,75 @@ function renderBillsSettings() {
       <span class="bill-amount">$${fmt(b.amount)}</span>
       ${b.due_day ? `<span class="bill-due">due ${b.due_day}${ordinal(b.due_day)}</span>` : ''}
       ${b.match_keyword ? `<span class="keyword-badge" title="Transactions matching this keyword are excluded from spending">${esc(b.match_keyword)}</span>` : ''}
+      <button class="icon-btn edit" onclick="openEditBillModal(${b.id})" title="Edit">✎</button>
       <button class="icon-btn delete" onclick="deleteBill(${b.id})">×</button>
     </div>
   `).join('');
+}
+
+function openEditBillModal(id) {
+  const bill = state.bills.find(b => b.id === id);
+  if (!bill) return;
+
+  document.querySelector('#modal-overlay .modal h3').textContent = 'Edit Bill';
+  document.getElementById('modal-body').innerHTML = `
+    <div class="edit-form">
+      <div class="edit-row">
+        <label class="settings-label">Name</label>
+        <input type="text" id="edit-bill-name" value="${esc(bill.name)}">
+      </div>
+      <div class="edit-row-two">
+        <div>
+          <label class="settings-label">Amount ($)</label>
+          <input type="number" id="edit-bill-amount" value="${bill.amount}" step="0.01" min="0">
+        </div>
+        <div>
+          <label class="settings-label">Due Day</label>
+          <input type="number" id="edit-bill-due" value="${bill.due_day || ''}" min="1" max="31" placeholder="Optional">
+        </div>
+      </div>
+      <div class="edit-row">
+        <label class="settings-label">Match Keywords</label>
+        <input type="text" id="edit-bill-keyword" value="${esc(bill.match_keyword || '')}"
+          placeholder="Comma-separated keywords — excludes matching transactions from spending">
+      </div>
+    </div>
+  `;
+  document.querySelector('#modal-overlay .modal-footer').innerHTML = `
+    <button onclick="closeModal()">Cancel</button>
+    <button class="btn-primary" onclick="saveEditBill(${id})">Save</button>
+  `;
+  document.getElementById('modal-overlay').classList.remove('hidden');
+  document.getElementById('edit-bill-name').focus();
+}
+
+async function saveEditBill(id) {
+  const name = document.getElementById('edit-bill-name').value.trim();
+  const amount = parseFloat(document.getElementById('edit-bill-amount').value);
+  const dueDayRaw = document.getElementById('edit-bill-due').value;
+  const keyword = document.getElementById('edit-bill-keyword').value.trim();
+
+  if (!name || isNaN(amount) || amount < 0) {
+    toast('Please enter a valid name and amount', true);
+    return;
+  }
+
+  await api(`/bills/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name,
+      amount,
+      due_day: dueDayRaw ? parseInt(dueDayRaw) : null,
+      match_keyword: keyword || null,
+    }),
+  });
+
+  closeModal();
+  await loadBills();
+  await applyBillMatching(true);
+  await loadDashboard();
+  toast(`Bill "${name}" updated`);
 }
 
 async function addBill(e) {
@@ -885,68 +951,50 @@ function showCategoryTransactions(category) {
 let _editingTxId = null;
 
 function openAddModal() {
-  _editingTxId = 'new';
   const today = new Date().toISOString().slice(0, 10);
+  document.getElementById('add-date').value = today;
+  document.getElementById('add-description').value = '';
+  document.getElementById('add-amount').value = '';
+  document.getElementById('add-type').value = 'expense';
+  document.getElementById('add-source').value = 'manual';
+  document.getElementById('add-notes').value = '';
+  document.getElementById('add-category').innerHTML = categoryOptions('Uncategorized');
+  document.getElementById('add-modal-overlay').classList.remove('hidden');
+  document.getElementById('add-description').focus();
+}
 
-  document.querySelector('#modal-overlay .modal h3').textContent = 'Add Transaction';
-  document.getElementById('modal-body').innerHTML = `
-    <div class="edit-form">
-      <div class="edit-row-two">
-        <div>
-          <label class="settings-label">Date</label>
-          <input type="date" id="edit-date" value="${today}">
-        </div>
-        <div>
-          <label class="settings-label">Type</label>
-          <select id="edit-type" class="edit-select">
-            <option value="expense" selected>Expense</option>
-            <option value="payment">Payment / Credit</option>
-          </select>
-        </div>
-      </div>
-      <div class="edit-row">
-        <label class="settings-label">Description</label>
-        <input type="text" id="edit-description" value="" placeholder="Merchant or description">
-      </div>
-      <div class="edit-row-two">
-        <div>
-          <label class="settings-label">Amount ($)</label>
-          <input type="number" id="edit-amount" value="" step="0.01" min="0" placeholder="0.00">
-        </div>
-        <div>
-          <label class="settings-label">Category</label>
-          <select id="edit-category" class="edit-select">${categoryOptions('Uncategorized')}</select>
-        </div>
-      </div>
-      <div class="edit-row-two">
-        <div>
-          <label class="settings-label">Source</label>
-          <select id="edit-source" class="edit-select">
-            <option value="manual" selected>Manual</option>
-            <option value="capital_one">Capital One</option>
-            <option value="chase">Chase</option>
-          </select>
-        </div>
-        <div>
-          <label class="settings-label">Notes</label>
-          <input type="text" id="edit-notes" value="" placeholder="Optional note">
-        </div>
-      </div>
-      <div class="edit-row">
-        <label class="toggle-label exclude-toggle">
-          <input type="checkbox" id="edit-exclude">
-          Exclude from spending <span class="exclude-hint">(already counted in Bills — won't be added to your spending total)</span>
-        </label>
-      </div>
-    </div>
-  `;
+function closeAddModal() {
+  document.getElementById('add-modal-overlay').classList.add('hidden');
+}
 
-  document.querySelector('#modal-overlay .modal-footer').innerHTML =
-    `<button onclick="closeModal()">Cancel</button>
-     <button class="btn-primary" onclick="saveModal()">Add</button>`;
+async function submitAddTransaction() {
+  const date = document.getElementById('add-date').value;
+  const description = document.getElementById('add-description').value.trim();
+  const amount = parseFloat(document.getElementById('add-amount').value);
+  const type = document.getElementById('add-type').value;
+  const category = document.getElementById('add-category').value;
+  const source = document.getElementById('add-source').value;
+  const notes = document.getElementById('add-notes').value.trim();
 
-  document.getElementById('modal-overlay').classList.remove('hidden');
-  document.getElementById('edit-description').focus();
+  if (!date || !description || isNaN(amount) || amount < 0) {
+    toast('Please fill in date, description, and a valid amount', true);
+    return;
+  }
+  try {
+    await api('/transactions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date, description, amount, type, category, source, notes }),
+    });
+    closeAddModal();
+    const newMonth = date.slice(0, 7);
+    if (newMonth === state.currentMonth) await loadTransactions();
+    else ensureMonthOption(newMonth);
+    await loadDashboard();
+    toast('Transaction added');
+  } catch (e) {
+    toast(e.message, true);
+  }
 }
 
 function openEditModal(id) {
@@ -1066,6 +1114,293 @@ async function saveModal() {
   } catch (e) {
     toast(e.message, true);
   }
+}
+
+// ---- Paste Modal ----
+
+const pasteState = { transactions: [] };
+
+function openPasteModal() {
+  document.getElementById('paste-textarea').value = '';
+  document.getElementById('paste-source').value = 'chase';
+  document.getElementById('paste-split').checked = false;
+  document.getElementById('paste-split-wrap').classList.add('hidden');
+  document.getElementById('paste-preview').classList.add('hidden');
+  document.getElementById('paste-import-btn').classList.add('hidden');
+  pasteState.transactions = [];
+  document.getElementById('paste-modal-overlay').classList.remove('hidden');
+  document.getElementById('paste-textarea').focus();
+}
+
+function closePasteModal() {
+  document.getElementById('paste-modal-overlay').classList.add('hidden');
+}
+
+function onPasteSourceChange() {
+  const isCapOne = document.getElementById('paste-source').value === 'capital_one';
+  document.getElementById('paste-split-wrap').classList.toggle('hidden', !isCapOne);
+}
+
+function parsePaste() {
+  const text = document.getElementById('paste-textarea').value;
+  const source = document.getElementById('paste-source').value;
+
+  const parsed = source === 'chase' ? parseChasePaste(text) : parseCapOnePaste(text);
+
+  if (parsed.length === 0) {
+    toast('No transactions found — make sure you copied the full transaction list from your bank.', true);
+    return;
+  }
+
+  pasteState.transactions = parsed;
+  renderPastePreview();
+  document.getElementById('paste-preview').classList.remove('hidden');
+  updatePasteImportBtn();
+}
+
+function renderPastePreview() {
+  const txs = pasteState.transactions;
+  document.getElementById('paste-parse-count').textContent =
+    `${txs.length} transaction${txs.length !== 1 ? 's' : ''} found`;
+
+  document.getElementById('paste-preview-body').innerHTML = txs.map((t, i) => `
+    <tr>
+      <td style="white-space:nowrap">${t.date}</td>
+      <td class="desc-cell" title="${esc(t.description)}">${esc(t.description)}</td>
+      <td class="amount-cell">$${fmt(t.amount)}</td>
+      <td style="color:var(--text-muted);font-size:12px">${esc(t.notes || '')}</td>
+      <td><button class="icon-btn delete" onclick="removePasteRow(${i})" title="Remove">×</button></td>
+    </tr>`).join('');
+}
+
+function removePasteRow(idx) {
+  pasteState.transactions.splice(idx, 1);
+  if (pasteState.transactions.length === 0) {
+    document.getElementById('paste-preview').classList.add('hidden');
+  } else {
+    renderPastePreview();
+  }
+  updatePasteImportBtn();
+}
+
+function updatePasteImportBtn() {
+  const btn = document.getElementById('paste-import-btn');
+  const count = pasteState.transactions.length;
+  btn.classList.toggle('hidden', count === 0);
+  btn.textContent = `Import ${count} transaction${count !== 1 ? 's' : ''}`;
+}
+
+function resetPaste() {
+  pasteState.transactions = [];
+  document.getElementById('paste-preview').classList.add('hidden');
+  document.getElementById('paste-import-btn').classList.add('hidden');
+  document.getElementById('paste-textarea').value = '';
+  document.getElementById('paste-textarea').focus();
+}
+
+async function importPasted() {
+  const txs = pasteState.transactions;
+  if (!txs.length) return;
+  const split = document.getElementById('paste-split').checked;
+  try {
+    const res = await api('/transactions/batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transactions: txs, split }),
+    });
+    closePasteModal();
+    const splitNote = split ? ' (50/50 split)' : '';
+    toast(`Imported ${res.count} transaction${res.count !== 1 ? 's' : ''}${splitNote}`);
+    if (res.months && res.months.length > 0) {
+      const latestMonth = res.months[res.months.length - 1];
+      state.currentMonth = latestMonth;
+      await loadMonths();
+      ensureMonthOption(latestMonth);
+      await Promise.all([loadDashboard(), loadTransactions()]);
+    }
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+// ---- Paste parsers ----
+
+const _MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+function parseChasePaste(text) {
+  const dateRe = new RegExp(`^(${_MONTHS.join('|')})\\s+(\\d{1,2}),\\s+(\\d{4})$`);
+  const amountRe = /^\$([\d,]+\.\d{2})$/;
+  const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+  const transactions = [];
+
+  // Chase pastes have two zones:
+  // 1. Pending section: no dates, just description block + amount (preceded by a long disclaimer wall)
+  // 2. Posted section: each transaction starts with a date line
+  const firstDateIdx = lines.findIndex(l => dateRe.test(l));
+  const pendingLines = lines.slice(0, firstDateIdx === -1 ? lines.length : firstDateIdx);
+  const postedLines = firstDateIdx >= 0 ? lines.slice(firstDateIdx) : [];
+
+  const today = new Date().toISOString().slice(0, 10);
+
+  // --- Pending: scan for amount lines; description block is everything since last amount,
+  //     filtered to short lines (junk disclaimer text is typically one very long line) ---
+  let lastAmtIdx = -1;
+  for (let i = 0; i < pendingLines.length; i++) {
+    const amtMatch = pendingLines[i].match(amountRe);
+    if (amtMatch) {
+      const amount = parseFloat(amtMatch[1].replace(/,/g, ''));
+      const block = pendingLines.slice(lastAmtIdx + 1, i)
+        .filter(l => l.length <= 70 && !/^pending/i.test(l));
+      if (block.length > 0) {
+        const description = _cleanChaseDesc(block[0]);
+        let category = 'Uncategorized';
+        for (let k = 1; k < block.length; k++) {
+          if (block[k] === block[k - 1] && block[k] !== block[0]) category = _mapChaseCategory(block[k]);
+        }
+        transactions.push({ date: today, description, amount, type: 'expense', source: 'chase', category, notes: 'Pending' });
+      }
+      lastAmtIdx = i;
+    }
+  }
+
+  // --- Posted: each block starts at a date line ---
+  let i = 0;
+  while (i < postedLines.length) {
+    const dateMatch = postedLines[i].match(dateRe);
+    if (dateMatch) {
+      const month = _MONTHS.indexOf(dateMatch[1]) + 1;
+      const date = `${dateMatch[3]}-${String(month).padStart(2,'0')}-${dateMatch[2].padStart(2,'0')}`;
+      const block = [];
+      let amount = null;
+      let j = i + 1;
+      while (j < postedLines.length) {
+        const line = postedLines[j];
+        if (line.match(dateRe)) break;
+        const amtMatch = line.match(amountRe);
+        if (amtMatch) { amount = parseFloat(amtMatch[1].replace(/,/g, '')); i = j; break; }
+        block.push(line);
+        j++;
+      }
+      if (block.length > 0 && amount !== null) {
+        const description = _cleanChaseDesc(block[0]);
+        let category = 'Uncategorized';
+        for (let k = 1; k < block.length; k++) {
+          if (block[k] === block[k - 1] && block[k] !== block[0]) category = _mapChaseCategory(block[k]);
+        }
+        transactions.push({ date, description, amount, type: 'expense', source: 'chase', category, notes: '' });
+      }
+    }
+    i++;
+  }
+
+  return transactions;
+}
+
+function _cleanChaseDesc(desc) {
+  const ci = desc.indexOf(',');
+  if (ci > 0 && desc.slice(ci + 1).trim().includes('.')) return desc.slice(0, ci).trim();
+  return desc;
+}
+
+function _mapChaseCategory(cat) {
+  const map = {
+    'shopping': 'Shopping', 'dining': 'Dining', 'food & drink': 'Dining',
+    'groceries': 'Groceries', 'gas': 'Gas', 'travel': 'Travel',
+    'entertainment': 'Entertainment', 'health & wellness': 'Health & Fitness',
+    'bills & utilities': 'Bills & Utilities', 'personal': 'Personal Care',
+    'automotive': 'Auto', 'gas & drive': 'Gas',
+  };
+  return map[cat.toLowerCase()] || cat;
+}
+
+function parseCapOnePaste(text) {
+  const monthRe = new RegExp(`^(${_MONTHS.join('|')})$`);
+  const amountRe = /^\$([\d,]+\.\d{2})$/;
+  const cardRe = /.+\.\.\.\d{4}$/;
+  const rewardsRe = /^\d+x /i;
+  const junk = new Set([
+    'Total:', 'Posted Transactions Since Your Last Statement', 'Print',
+    'Date', 'Description', 'Category', 'Card', 'Amount', 'Details',
+    'Posted Transactions',
+  ]);
+
+  const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+  const transactions = [];
+  const now = new Date();
+  const curYear = now.getFullYear();
+  const curMonth = now.getMonth() + 1;
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    if (line === 'Pending') {
+      i++;
+      const r = _capOneBlock(lines, i, junk, cardRe, rewardsRe, monthRe, amountRe);
+      if (r) {
+        const today = now.toISOString().slice(0, 10);
+        transactions.push({ date: today, description: r.description, amount: r.amount, type: 'expense', source: 'capital_one', category: r.category, notes: 'Pending' });
+        i = r.endIdx;
+      }
+      continue;
+    }
+
+    if (monthRe.test(line) && i + 1 < lines.length && /^\d{1,2}$/.test(lines[i + 1])) {
+      const monthNum = _MONTHS.indexOf(line) + 1;
+      const day = parseInt(lines[i + 1]);
+      const year = monthNum > curMonth ? curYear - 1 : curYear;
+      const date = `${year}-${String(monthNum).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+      i += 2;
+      const r = _capOneBlock(lines, i, junk, cardRe, rewardsRe, monthRe, amountRe);
+      if (r) {
+        transactions.push({ date, description: r.description, amount: r.amount, type: 'expense', source: 'capital_one', category: r.category, notes: '' });
+        i = r.endIdx;
+      }
+      continue;
+    }
+
+    i++;
+  }
+  return transactions;
+}
+
+function _capOneBlock(lines, startIdx, junk, cardRe, rewardsRe, monthRe, amountRe) {
+  let description = null;
+  let category = null;
+  let amount = null;
+  let j = startIdx;
+
+  while (j < lines.length) {
+    const line = lines[j];
+    const amtMatch = line.match(amountRe);
+    if (amtMatch) {
+      amount = parseFloat(amtMatch[1].replace(/,/g, ''));
+      j++;
+      break;
+    }
+    if (line === 'Pending' || monthRe.test(line)) break;
+    if (cardRe.test(line) || rewardsRe.test(line) || junk.has(line)) { j++; continue; }
+    if (!description) description = line;
+    else if (!category) category = _mapCapOneCategory(line);
+    j++;
+  }
+
+  return (description && amount !== null)
+    ? { description, category: category || 'Uncategorized', amount, endIdx: j }
+    : null;
+}
+
+function _mapCapOneCategory(cat) {
+  const map = {
+    'grocery': 'Groceries', 'dining': 'Dining', 'merchandise': 'Shopping',
+    'gas/automotive': 'Gas', 'gas': 'Gas', 'utilities': 'Bills & Utilities',
+    'travel': 'Travel', 'entertainment': 'Entertainment',
+    'health': 'Health & Fitness', 'medical': 'Health & Fitness',
+    'personal': 'Personal Care', 'other': 'Other', 'streaming': 'Subscriptions',
+    'phone': 'Bills & Utilities', 'education': 'Other', 'insurance': 'Insurance',
+    'home': 'Home',
+  };
+  return map[cat.toLowerCase()] || 'Uncategorized';
 }
 
 // ---- Utilities ----

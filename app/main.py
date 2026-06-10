@@ -149,6 +149,28 @@ async def upload_csv(file: UploadFile = File(...), split: bool = False, replace:
     return {"imported": len(parsed), "month_year": month_year, "source": source, "replaced": replace}
 
 
+class TransactionBatch(BaseModel):
+    transactions: list[TransactionCreate]
+    split: bool = False
+
+
+@app.post("/api/transactions/batch")
+def create_transactions_batch(body: TransactionBatch):
+    months = set()
+    for t in body.transactions:
+        month_year = t.date[:7]
+        tx = {**t.model_dump(), 'month_year': month_year, 'is_split': 0}
+        if body.split and t.source == 'capital_one' and t.type == 'expense':
+            tx['amount'] = round(tx['amount'] / 2, 2)
+            tx['is_split'] = 1
+        db.insert_transaction(tx)
+        months.add(month_year)
+    for month in months:
+        db.apply_bill_matching(month)
+        db.apply_category_rules(month)
+    return {"count": len(body.transactions), "months": sorted(months)}
+
+
 @app.post("/api/transactions/{month_year}/split-capital-one")
 def split_capital_one(month_year: str):
     count = db.split_capital_one_transactions(month_year)
@@ -322,6 +344,19 @@ def list_bills():
 def create_bill(body: BillCreate):
     bill_id = db.insert_bill(body.model_dump())
     return {"id": bill_id}
+
+
+class BillUpdate(BaseModel):
+    name: str | None = None
+    amount: float | None = None
+    due_day: int | None = None
+    match_keyword: str | None = None
+
+
+@app.put("/api/bills/{bill_id}")
+def update_bill(bill_id: int, body: BillUpdate):
+    db.update_bill(bill_id, body.model_dump(exclude_none=True))
+    return {"ok": True}
 
 
 @app.delete("/api/bills/{bill_id}")

@@ -55,7 +55,8 @@
           + Upload CSV
           <input type="file" accept=".csv" id="csv-upload" onchange="handleCSVUpload(this)">
         </label>
-        <button class="upload-btn" onclick="openAddModal()">+ Add Transaction</button>
+        <button type="button" class="upload-btn" onclick="openAddModal()">+ Add Transaction</button>
+        <button type="button" class="upload-btn paste-btn" onclick="openPasteModal()">+ Paste</button>
         <label class="toggle-label split-toggle" title="Halves Capital One expense amounts on import">
           <input type="checkbox" id="split-capone" onchange="onSplitToggle(this.checked)">
           Split Cap One 50/50
@@ -205,6 +206,103 @@
       <div class="modal-footer">
         <button onclick="closeModal()">Cancel</button>
         <button class="btn-primary" onclick="saveModal()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add transaction modal -->
+  <div id="add-modal-overlay" class="modal-overlay hidden" onclick="closeAddModal()">
+    <div class="modal" onclick="event.stopPropagation()">
+      <h3>Add Transaction</h3>
+      <div class="edit-form">
+        <div class="edit-row-two">
+          <div>
+            <label class="settings-label">Date</label>
+            <input type="date" id="add-date">
+          </div>
+          <div>
+            <label class="settings-label">Type</label>
+            <select id="add-type" class="edit-select">
+              <option value="expense" selected>Expense</option>
+              <option value="payment">Payment / Credit</option>
+            </select>
+          </div>
+        </div>
+        <div class="edit-row">
+          <label class="settings-label">Description</label>
+          <input type="text" id="add-description" placeholder="Merchant or description">
+        </div>
+        <div class="edit-row-two">
+          <div>
+            <label class="settings-label">Amount ($)</label>
+            <input type="number" id="add-amount" step="0.01" min="0" placeholder="0.00">
+          </div>
+          <div>
+            <label class="settings-label">Category</label>
+            <select id="add-category" class="edit-select"></select>
+          </div>
+        </div>
+        <div class="edit-row-two">
+          <div>
+            <label class="settings-label">Source</label>
+            <select id="add-source" class="edit-select">
+              <option value="manual" selected>Manual</option>
+              <option value="capital_one">Capital One</option>
+              <option value="chase">Chase</option>
+            </select>
+          </div>
+          <div>
+            <label class="settings-label">Notes</label>
+            <input type="text" id="add-notes" placeholder="Optional note">
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" onclick="closeAddModal()">Cancel</button>
+        <button type="button" class="btn-primary" onclick="submitAddTransaction()">Add</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Paste transactions modal -->
+  <div id="paste-modal-overlay" class="modal-overlay hidden" onclick="closePasteModal()">
+    <div class="modal modal-paste" onclick="event.stopPropagation()">
+      <h3>Paste Transactions</h3>
+      <div class="paste-top">
+        <div class="paste-source-row">
+          <div>
+            <label class="settings-label">Source</label>
+            <select id="paste-source" class="edit-select" onchange="onPasteSourceChange()">
+              <option value="chase">Chase</option>
+              <option value="capital_one">Capital One</option>
+            </select>
+          </div>
+          <label id="paste-split-wrap" class="toggle-label hidden">
+            <input type="checkbox" id="paste-split">
+            Split 50/50
+          </label>
+        </div>
+        <textarea id="paste-textarea" class="paste-textarea"
+          placeholder="Copy transactions from your bank's website and paste here…"></textarea>
+        <button class="btn-primary" onclick="parsePaste()">Parse</button>
+      </div>
+      <div id="paste-preview" class="hidden">
+        <div class="paste-preview-header">
+          <span id="paste-parse-count"></span>
+          <button class="btn-ghost btn-sm" onclick="resetPaste()">Clear</button>
+        </div>
+        <div class="paste-preview-scroll">
+          <table class="merchant-tx-table">
+            <thead>
+              <tr><th>Date</th><th>Description</th><th>Amount</th><th>Notes</th><th></th></tr>
+            </thead>
+            <tbody id="paste-preview-body"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button onclick="closePasteModal()">Cancel</button>
+        <button id="paste-import-btn" class="btn-primary hidden" onclick="importPasted()">Import</button>
       </div>
     </div>
   </div>

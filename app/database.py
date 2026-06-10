@@ -109,9 +109,9 @@ def get_transactions(month_year: str) -> list[dict]:
 def insert_transaction(tx: dict) -> int:
     with get_db() as conn:
         cur = conn.execute(
-            """INSERT INTO transactions (date, description, amount, type, category, source, month_year, is_split)
-               VALUES (:date, :description, :amount, :type, :category, :source, :month_year, :is_split)""",
-            tx
+            """INSERT INTO transactions (date, description, amount, type, category, source, month_year, notes, is_split)
+               VALUES (:date, :description, :amount, :type, :category, :source, :month_year, :notes, :is_split)""",
+            {**tx, 'notes': tx.get('notes', '')}
         )
         return cur.lastrowid
 
@@ -344,7 +344,8 @@ def apply_bill_matching(month_year: str) -> int:
         count = 0
         for tx in tx_rows:
             desc_lower = tx["description"].lower()
-            matched = any(kw in desc_lower for kw in keywords)
+            # Check both directions: keyword in description OR description in keyword (handles bank truncation)
+            matched = any(kw in desc_lower or desc_lower in kw for kw in keywords)
             new_val = 1 if matched else 0
             conn.execute(
                 "UPDATE transactions SET exclude_from_spending = ? WHERE id = ?",
@@ -353,6 +354,16 @@ def apply_bill_matching(month_year: str) -> int:
             if matched:
                 count += 1
         return count
+
+
+def update_bill(bill_id: int, fields: dict):
+    allowed = {"name", "amount", "due_day", "match_keyword"}
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        return
+    sets = ", ".join(f"{k} = ?" for k in updates)
+    with get_db() as conn:
+        conn.execute(f"UPDATE bills SET {sets} WHERE id = ?", (*updates.values(), bill_id))
 
 
 def delete_bill(bill_id: int):
