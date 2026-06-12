@@ -34,9 +34,40 @@ function getCurrentMonth() {
 // ---- Init ----
 
 document.addEventListener('DOMContentLoaded', async () => {
+  updateThemeIcon(document.documentElement.getAttribute('data-theme'));
   await loadMonths();
   await Promise.all([loadDashboard(), loadTransactions(), loadBills(), loadDefaultSettings(), loadCategoryRules()]);
 });
+
+// ---- Theme ----
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+  const next = current === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('theme', next);
+  updateThemeIcon(next);
+}
+
+function updateThemeIcon(theme) {
+  const el = document.getElementById('theme-icon');
+  if (el) el.textContent = theme === 'dark' ? '☀️' : '🌙';
+}
+
+// ---- Refresh ----
+
+async function refreshTransactions(btn) {
+  if (btn) btn.classList.add('refreshing');
+  try {
+    await loadMonths();
+    await Promise.all([loadTransactions(), loadDashboard()]);
+    toast('Transactions refreshed');
+  } catch (e) {
+    toast('Refresh failed: ' + e.message, true);
+  } finally {
+    if (btn) btn.classList.remove('refreshing');
+  }
+}
 
 // ---- Tabs ----
 
@@ -108,7 +139,7 @@ function formatMonthShort(m) {
 // ---- API helper ----
 
 async function api(path, opts = {}) {
-  const res = await fetch('/api' + path, opts);
+  const res = await fetch('api' + path, opts);
   if (!res.ok) {
     const body = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(body.detail || res.statusText);
@@ -231,12 +262,55 @@ function renderWeeklyBreakdown(weeks, totalSpendable) {
 }
 
 async function editIncome() {
-  const val = prompt(`Set income for ${formatMonth(state.currentMonth)}:`, state.dashboard?.income || 0);
-  if (val === null || val.trim() === '') return;
-  const amount = parseFloat(val);
-  if (isNaN(amount) || amount < 0) { toast('Invalid amount', true); return; }
-  await api(`/income/${state.currentMonth}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ income: amount }) });
-  await loadDashboard();
+  document.getElementById('income-modal-month').textContent = formatMonth(state.currentMonth);
+  document.getElementById('income-entry-amount').value = '';
+  document.getElementById('income-entry-label').value = '';
+  await renderIncomeEntries();
+  document.getElementById('income-modal-overlay').classList.remove('hidden');
+  document.getElementById('income-entry-amount').focus();
+}
+
+async function renderIncomeEntries() {
+  const data = await api(`/income/${state.currentMonth}/entries`);
+  const listEl = document.getElementById('income-entries-list');
+  if (!data.entries.length) {
+    listEl.innerHTML = '<p class="empty">No income added yet.</p>';
+  } else {
+    listEl.innerHTML = data.entries.map(e => `
+      <div class="income-entry-row">
+        <span class="income-entry-label">${esc(e.label) || '<span class="muted">Income</span>'}</span>
+        <span class="income-entry-amount">$${fmt(e.amount)}</span>
+        <button class="income-entry-del" title="Remove" onclick="deleteIncomeEntry(${e.id})">×</button>
+      </div>
+    `).join('');
+  }
+  document.getElementById('income-modal-total').textContent = '$' + fmt(data.total);
+}
+
+async function addIncomeEntry() {
+  const amountEl = document.getElementById('income-entry-amount');
+  const labelEl = document.getElementById('income-entry-label');
+  const amount = parseFloat(amountEl.value);
+  if (isNaN(amount) || amount <= 0) { toast('Enter a valid income amount', true); return; }
+  await api(`/income/${state.currentMonth}/entries`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ amount, label: labelEl.value.trim() }),
+  });
+  amountEl.value = '';
+  labelEl.value = '';
+  amountEl.focus();
+  await renderIncomeEntries();
+}
+
+async function deleteIncomeEntry(id) {
+  await api(`/income/entries/${id}`, { method: 'DELETE' });
+  await renderIncomeEntries();
+}
+
+function closeIncomeModal() {
+  document.getElementById('income-modal-overlay').classList.add('hidden');
+  loadDashboard();
 }
 
 async function editSavings() {
@@ -470,7 +544,7 @@ async function handleCSVUpload(input) {
   const split = document.getElementById('split-capone').checked;
   const replace = document.getElementById('replace-upload').checked;
   try {
-    const res = await fetch(`/api/transactions/upload?split=${split}&replace=${replace}`, { method: 'POST', body: formData });
+    const res = await fetch(`api/transactions/upload?split=${split}&replace=${replace}`, { method: 'POST', body: formData });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || 'Upload failed');
     const notes = [
@@ -488,25 +562,23 @@ async function handleCSVUpload(input) {
   input.value = '';
 }
 
-// ---- Split ----
+// ---- Capital One split (Settings toggle — acts on the selected month) ----
 
 async function onSplitToggle(checked) {
   await api('/settings/capital_one_split', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: checked ? 1 : 0 }) });
-  updateApplySplitButton();
-}
-
-function updateApplySplitButton() {
-  const checked = document.getElementById('split-capone').checked;
-  const hasUnsplit = state.allTransactions.some(t => t.source === 'capital_one' && t.type === 'expense' && !t.is_split);
-  document.getElementById('apply-split-btn').classList.toggle('hidden', !(checked && hasUnsplit));
-}
-
-async function applyCapOneSplit() {
-  const data = await api(`/transactions/${state.currentMonth}/split-capital-one`, { method: 'POST' });
-  if (data.count === 0) { toast('No un-split Capital One transactions found'); return; }
-  toast(`Split ${data.count} Capital One transaction${data.count !== 1 ? 's' : ''} 50/50`);
+  const action = checked ? 'split-capital-one' : 'unsplit-capital-one';
+  const data = await api(`/transactions/${state.currentMonth}/${action}`, { method: 'POST' });
+  if (data.count === 0) {
+    toast(`No Capital One transactions to ${checked ? 'split' : 'restore'} for ${formatMonth(state.currentMonth)}`);
+  } else {
+    const verb = checked ? 'Split' : 'Restored';
+    toast(`${verb} ${data.count} Capital One transaction${data.count !== 1 ? 's' : ''} for ${formatMonth(state.currentMonth)}`);
+  }
   await Promise.all([loadDashboard(), loadTransactions()]);
 }
+
+// The apply-split button moved to the Settings toggle; kept as a no-op for legacy callers.
+function updateApplySplitButton() {}
 
 // ---- Bills ----
 

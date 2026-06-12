@@ -62,6 +62,14 @@ def init_db():
                 savings_target REAL NOT NULL DEFAULT 0
             );
 
+            CREATE TABLE IF NOT EXISTS income_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                month_year TEXT NOT NULL,
+                label TEXT NOT NULL DEFAULT '',
+                amount REAL NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -127,6 +135,22 @@ def split_capital_one_transactions(month_year: str) -> int:
             conn.execute(
                 "UPDATE transactions SET amount = ?, is_split = 1 WHERE id = ?",
                 (round(r["amount"] / 2, 2), r["id"])
+            )
+        return len(rows)
+
+
+def unsplit_capital_one_transactions(month_year: str) -> int:
+    """Restore previously-split Capital One expenses by doubling them back to full amount."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT id, amount FROM transactions
+               WHERE month_year = ? AND source = 'capital_one' AND type = 'expense' AND is_split = 1""",
+            (month_year,)
+        ).fetchall()
+        for r in rows:
+            conn.execute(
+                "UPDATE transactions SET amount = ?, is_split = 0 WHERE id = ?",
+                (round(r["amount"] * 2, 2), r["id"])
             )
         return len(rows)
 
@@ -211,6 +235,11 @@ def get_dashboard(month_year: str) -> dict:
         else:
             income = float(default_income_row["value"]) if default_income_row else 0.0
             savings_target = float(default_savings_row["value"]) if default_savings_row else 0.0
+
+        # Income entries (line items) take precedence over the single-value/default income
+        entries_total, entries_count = _income_entries_total(conn, month_year)
+        if entries_count:
+            income = entries_total
 
         # Bills with payment status
         bill_rows = conn.execute("SELECT * FROM bills WHERE is_active = 1").fetchall()
@@ -396,6 +425,38 @@ def toggle_bill_payment(bill_id: int, month_year: str) -> bool:
 
 # --- Income & Savings ---
 
+def _income_entries_total(conn, month_year: str) -> tuple[float, int]:
+    """Return (sum_of_amounts, count) of income entries for the month."""
+    row = conn.execute(
+        "SELECT COALESCE(SUM(amount), 0) AS total, COUNT(*) AS n FROM income_entries WHERE month_year = ?",
+        (month_year,)
+    ).fetchone()
+    return (round(row["total"], 2), row["n"])
+
+
+def get_income_entries(month_year: str) -> list[dict]:
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT id, month_year, label, amount FROM income_entries WHERE month_year = ? ORDER BY id",
+            (month_year,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def add_income_entry(month_year: str, label: str, amount: float) -> int:
+    with get_db() as conn:
+        cur = conn.execute(
+            "INSERT INTO income_entries (month_year, label, amount) VALUES (?, ?, ?)",
+            (month_year, label, amount)
+        )
+        return cur.lastrowid
+
+
+def delete_income_entry(entry_id: int):
+    with get_db() as conn:
+        conn.execute("DELETE FROM income_entries WHERE id = ?", (entry_id,))
+
+
 def set_income(month_year: str, income: float):
     with get_db() as conn:
         conn.execute(
@@ -443,6 +504,13 @@ def get_annual_summary(year: int) -> dict:
         ).fetchall()
         mi_by_month = {r["month_year"]: r for r in mi_rows}
 
+        # Income entries summed per month (take precedence over single-value/default income)
+        entry_rows = conn.execute(
+            "SELECT month_year, ROUND(SUM(amount), 2) AS total FROM income_entries WHERE month_year LIKE ? GROUP BY month_year",
+            (year_prefix,)
+        ).fetchall()
+        entries_by_month = {r["month_year"]: r["total"] for r in entry_rows}
+
         # Bills (global, same every month)
         bills_total = conn.execute(
             "SELECT COALESCE(SUM(amount), 0) FROM bills WHERE is_active=1"
@@ -454,10 +522,12 @@ def get_annual_summary(year: int) -> dict:
 
         for m in range(1, 13):
             my = f"{year}-{m:02d}"
-            has_data = my in spending_by_month
+            has_data = my in spending_by_month or my in entries_by_month
             spending = spending_by_month.get(my, 0.0)
             mi = mi_by_month.get(my)
             income = (mi["income"] or default_income) if mi else default_income
+            if my in entries_by_month:
+                income = entries_by_month[my]
             savings = (mi["savings_target"] or default_savings) if mi else default_savings
             net = round(income - spending - bills_total - savings, 2)
 

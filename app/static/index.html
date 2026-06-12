@@ -4,7 +4,15 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Finance Tracker</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="static/style.css">
+  <script>
+    // Apply saved/system theme before first paint to avoid a flash
+    (function () {
+      var saved = localStorage.getItem('theme');
+      var theme = saved || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+      document.documentElement.setAttribute('data-theme', theme);
+    })();
+  </script>
 </head>
 <body>
   <header>
@@ -15,6 +23,7 @@
         <button class="tab-btn" data-tab="transactions" onclick="showTab('transactions')">Transactions</button>
         <button class="tab-btn" data-tab="year" onclick="showTab('year')">Year</button>
         <button class="tab-btn" data-tab="settings" onclick="showTab('settings')">Settings</button>
+        <button class="tab-btn theme-toggle" onclick="toggleTheme()" title="Toggle dark mode" aria-label="Toggle dark mode"><span id="theme-icon">🌙</span></button>
       </nav>
     </div>
   </header>
@@ -57,17 +66,11 @@
         </label>
         <button type="button" class="upload-btn" onclick="openAddModal()">+ Add Transaction</button>
         <button type="button" class="upload-btn paste-btn" onclick="openPasteModal()">+ Paste</button>
-        <label class="toggle-label split-toggle" title="Halves Capital One expense amounts on import">
-          <input type="checkbox" id="split-capone" onchange="onSplitToggle(this.checked)">
-          Split Cap One 50/50
-        </label>
+        <button type="button" class="upload-btn refresh-btn" onclick="refreshTransactions(this)" title="Reload transactions from the server">↻ Refresh</button>
         <label class="toggle-label replace-toggle" title="Deletes existing transactions for that source+month before importing">
           <input type="checkbox" id="replace-upload">
           Replace existing
         </label>
-        <button id="apply-split-btn" class="apply-split-btn hidden" onclick="applyCapOneSplit()">
-          Apply split to this month
-        </button>
         <button id="apply-matching-btn" class="apply-split-btn hidden" onclick="applyBillMatching()">
           Re-apply bill matching
         </button>
@@ -86,6 +89,7 @@
         <span id="tx-count" class="tx-count"></span>
       </div>
       <div class="card table-card">
+        <div class="table-scroll">
         <table id="transactions-table">
           <thead>
             <tr>
@@ -101,6 +105,7 @@
           </thead>
           <tbody id="transactions-body"></tbody>
         </table>
+        </div>
       </div>
     </section>
 
@@ -115,6 +120,7 @@
       <div class="two-col year-grid">
         <div class="card">
           <h2>Monthly Breakdown</h2>
+          <div class="table-scroll">
           <table id="year-monthly-table" class="year-table">
             <thead>
               <tr>
@@ -128,6 +134,7 @@
             </thead>
             <tbody id="year-monthly-body"></tbody>
           </table>
+          </div>
         </div>
         <div class="card">
           <h2>Merchants</h2>
@@ -180,6 +187,14 @@
             <button class="btn-primary" onclick="saveDefaultSavings()">Save</button>
           </div>
         </div>
+      </div>
+      <div class="card" style="margin-top:1rem">
+        <h2>Capital One Split</h2>
+        <p class="help-text">Halves Capital One expense amounts (shared 50/50). This applies to the month selected in the bar above — turning it <strong>on</strong> splits that month's Capital One expenses, <strong>off</strong> restores them to full. New imports for that month follow this setting too.</p>
+        <label class="toggle-label split-toggle">
+          <input type="checkbox" id="split-capone" onchange="onSplitToggle(this.checked)">
+          Split Capital One 50/50
+        </label>
       </div>
       <div class="card" style="margin-top:1rem">
         <h2>Category Rules</h2>
@@ -264,6 +279,30 @@
     </div>
   </div>
 
+  <!-- Income entries modal -->
+  <div id="income-modal-overlay" class="modal-overlay hidden" onclick="closeIncomeModal()">
+    <div class="modal" onclick="event.stopPropagation()">
+      <h3>Income — <span id="income-modal-month"></span></h3>
+      <p class="help-text">Add each income amount (e.g. a paycheck). The month's income is the total of all entries.</p>
+      <div id="income-entries-list"></div>
+      <div class="edit-row-two">
+        <div>
+          <label class="settings-label">Amount ($)</label>
+          <input type="number" id="income-entry-amount" step="0.01" min="0" placeholder="0.00" onkeydown="if(event.key==='Enter')addIncomeEntry()">
+        </div>
+        <div>
+          <label class="settings-label">Label (optional)</label>
+          <input type="text" id="income-entry-label" placeholder="e.g. Paycheck" onkeydown="if(event.key==='Enter')addIncomeEntry()">
+        </div>
+      </div>
+      <button type="button" class="btn-primary" onclick="addIncomeEntry()">Add income</button>
+      <div class="income-total-row">Total income: <strong id="income-modal-total">$0.00</strong></div>
+      <div class="modal-footer">
+        <button type="button" onclick="closeIncomeModal()">Done</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Paste transactions modal -->
   <div id="paste-modal-overlay" class="modal-overlay hidden" onclick="closePasteModal()">
     <div class="modal modal-paste" onclick="event.stopPropagation()">
@@ -309,6 +348,6 @@
 
   <div id="toast" class="toast hidden"></div>
 
-  <script src="/static/app.js"></script>
+  <script src="static/app.js"></script>
 </body>
 </html>

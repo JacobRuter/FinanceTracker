@@ -4,7 +4,7 @@ import os
 from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -26,9 +26,23 @@ def startup():
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
+def _asset_version(filename: str) -> str:
+    """Cache-busting token from the file's mtime, so updates load without a hard refresh."""
+    try:
+        return str(int(os.path.getmtime(os.path.join(STATIC_DIR, filename))))
+    except OSError:
+        return "1"
+
+
 @app.get("/")
 def index():
-    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+    with open(os.path.join(STATIC_DIR, "index.html")) as f:
+        html = f.read()
+    html = html.replace('href="static/style.css"',
+                        f'href="static/style.css?v={_asset_version("style.css")}"')
+    html = html.replace('src="static/app.js"',
+                        f'src="static/app.js?v={_asset_version("app.js")}"')
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
 
 # --- Months ---
@@ -174,6 +188,12 @@ def create_transactions_batch(body: TransactionBatch):
 @app.post("/api/transactions/{month_year}/split-capital-one")
 def split_capital_one(month_year: str):
     count = db.split_capital_one_transactions(month_year)
+    return {"count": count}
+
+
+@app.post("/api/transactions/{month_year}/unsplit-capital-one")
+def unsplit_capital_one(month_year: str):
+    count = db.unsplit_capital_one_transactions(month_year)
     return {"count": count}
 
 
@@ -382,6 +402,30 @@ class IncomeSet(BaseModel):
 @app.post("/api/income/{month_year}")
 def set_income(month_year: str, body: IncomeSet):
     db.set_income(month_year, body.income)
+    return {"ok": True}
+
+
+class IncomeEntryAdd(BaseModel):
+    amount: float
+    label: str = ""
+
+
+@app.get("/api/income/{month_year}/entries")
+def get_income_entries(month_year: str):
+    entries = db.get_income_entries(month_year)
+    total = round(sum(e["amount"] for e in entries), 2)
+    return {"entries": entries, "total": total}
+
+
+@app.post("/api/income/{month_year}/entries")
+def add_income_entry(month_year: str, body: IncomeEntryAdd):
+    entry_id = db.add_income_entry(month_year, body.label.strip(), body.amount)
+    return {"ok": True, "id": entry_id}
+
+
+@app.delete("/api/income/entries/{entry_id}")
+def delete_income_entry(entry_id: int):
+    db.delete_income_entry(entry_id)
     return {"ok": True}
 
 
