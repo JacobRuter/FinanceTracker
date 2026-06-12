@@ -423,10 +423,22 @@ def add_income_entry(month_year: str, body: IncomeEntryAdd):
     return {"ok": True, "id": entry_id}
 
 
+@app.put("/api/income/entries/{entry_id}")
+def update_income_entry(entry_id: int, body: IncomeEntryAdd):
+    db.update_income_entry(entry_id, body.label.strip(), body.amount)
+    return {"ok": True}
+
+
 @app.delete("/api/income/entries/{entry_id}")
 def delete_income_entry(entry_id: int):
     db.delete_income_entry(entry_id)
     return {"ok": True}
+
+
+@app.post("/api/income/{month_year}/save-template")
+def save_income_template(month_year: str):
+    count = db.set_income_template_from_month(month_year)
+    return {"ok": True, "count": count}
 
 
 class SavingsSet(BaseModel):

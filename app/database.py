@@ -70,6 +70,12 @@ def init_db():
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
+            CREATE TABLE IF NOT EXISTS income_templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                label TEXT NOT NULL DEFAULT '',
+                amount REAL NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -94,6 +100,21 @@ def init_db():
                 conn.execute(stmt)
             except Exception:
                 pass  # column already exists
+
+    # Seed the recurring income template from the most recent month that has
+    # entries, so existing setups get a template to prepopulate future months.
+    with get_db() as conn:
+        has_template = conn.execute("SELECT COUNT(*) FROM income_templates").fetchone()[0]
+        if not has_template:
+            latest = conn.execute(
+                "SELECT month_year FROM income_entries ORDER BY month_year DESC LIMIT 1"
+            ).fetchone()
+            if latest:
+                conn.execute(
+                    "INSERT INTO income_templates (label, amount) "
+                    "SELECT label, amount FROM income_entries WHERE month_year = ?",
+                    (latest["month_year"],)
+                )
 
     # Seed default category rules
     with get_db() as conn:
@@ -236,10 +257,14 @@ def get_dashboard(month_year: str) -> dict:
             income = float(default_income_row["value"]) if default_income_row else 0.0
             savings_target = float(default_savings_row["value"]) if default_savings_row else 0.0
 
-        # Income entries (line items) take precedence over the single-value/default income
+        # Precedence: this month's line-item entries > recurring template > single-value/default
         entries_total, entries_count = _income_entries_total(conn, month_year)
         if entries_count:
             income = entries_total
+        else:
+            template_total, template_count = _income_template_total(conn)
+            if template_count:
+                income = template_total
 
         # Bills with payment status
         bill_rows = conn.execute("SELECT * FROM bills WHERE is_active = 1").fetchall()
@@ -434,13 +459,56 @@ def _income_entries_total(conn, month_year: str) -> tuple[float, int]:
     return (round(row["total"], 2), row["n"])
 
 
+def _income_template_total(conn) -> tuple[float, int]:
+    """Return (sum_of_amounts, count) of the recurring income template."""
+    row = conn.execute(
+        "SELECT COALESCE(SUM(amount), 0) AS total, COUNT(*) AS n FROM income_templates"
+    ).fetchone()
+    return (round(row["total"], 2), row["n"])
+
+
+def _seed_month_from_template(conn, month_year: str):
+    """Copy the recurring template into a month that has no entries yet."""
+    has = conn.execute(
+        "SELECT 1 FROM income_entries WHERE month_year = ? LIMIT 1", (month_year,)
+    ).fetchone()
+    if not has:
+        conn.execute(
+            "INSERT INTO income_entries (month_year, label, amount) "
+            "SELECT ?, label, amount FROM income_templates ORDER BY id",
+            (month_year,)
+        )
+
+
 def get_income_entries(month_year: str) -> list[dict]:
+    """Return a month's income entries, seeding from the recurring template if empty."""
     with get_db() as conn:
+        _seed_month_from_template(conn, month_year)
         rows = conn.execute(
             "SELECT id, month_year, label, amount FROM income_entries WHERE month_year = ? ORDER BY id",
             (month_year,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def get_income_template() -> list[dict]:
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT id, label, amount FROM income_templates ORDER BY id"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def set_income_template_from_month(month_year: str) -> int:
+    """Replace the recurring template with the given month's current entries."""
+    with get_db() as conn:
+        conn.execute("DELETE FROM income_templates")
+        conn.execute(
+            "INSERT INTO income_templates (label, amount) "
+            "SELECT label, amount FROM income_entries WHERE month_year = ? ORDER BY id",
+            (month_year,)
+        )
+        return conn.execute("SELECT COUNT(*) FROM income_templates").fetchone()[0]
 
 
 def add_income_entry(month_year: str, label: str, amount: float) -> int:
@@ -450,6 +518,14 @@ def add_income_entry(month_year: str, label: str, amount: float) -> int:
             (month_year, label, amount)
         )
         return cur.lastrowid
+
+
+def update_income_entry(entry_id: int, label: str, amount: float):
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE income_entries SET label = ?, amount = ? WHERE id = ?",
+            (label, amount, entry_id)
+        )
 
 
 def delete_income_entry(entry_id: int):
@@ -511,6 +587,9 @@ def get_annual_summary(year: int) -> dict:
         ).fetchall()
         entries_by_month = {r["month_year"]: r["total"] for r in entry_rows}
 
+        # Recurring template income (projected onto months without their own entries)
+        template_total, template_count = _income_template_total(conn)
+
         # Bills (global, same every month)
         bills_total = conn.execute(
             "SELECT COALESCE(SUM(amount), 0) FROM bills WHERE is_active=1"
@@ -522,10 +601,12 @@ def get_annual_summary(year: int) -> dict:
 
         for m in range(1, 13):
             my = f"{year}-{m:02d}"
-            has_data = my in spending_by_month or my in entries_by_month
+            has_data = my in spending_by_month
             spending = spending_by_month.get(my, 0.0)
             mi = mi_by_month.get(my)
             income = (mi["income"] or default_income) if mi else default_income
+            if template_count:
+                income = template_total
             if my in entries_by_month:
                 income = entries_by_month[my]
             savings = (mi["savings_target"] or default_savings) if mi else default_savings

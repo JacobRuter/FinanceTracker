@@ -274,17 +274,32 @@ async function renderIncomeEntries() {
   const data = await api(`/income/${state.currentMonth}/entries`);
   const listEl = document.getElementById('income-entries-list');
   if (!data.entries.length) {
-    listEl.innerHTML = '<p class="empty">No income added yet.</p>';
+    listEl.innerHTML = '<p class="empty">No income yet. Add one below.</p>';
   } else {
     listEl.innerHTML = data.entries.map(e => `
-      <div class="income-entry-row">
-        <span class="income-entry-label">${esc(e.label) || '<span class="muted">Income</span>'}</span>
-        <span class="income-entry-amount">$${fmt(e.amount)}</span>
+      <div class="income-entry-row" data-id="${e.id}">
+        <input class="income-entry-label-input" value="${esc(e.label)}" placeholder="Label" onchange="saveIncomeEntry(${e.id})">
+        <input class="income-entry-amount-input" type="number" step="0.01" min="0" value="${e.amount}" onchange="saveIncomeEntry(${e.id})">
         <button class="income-entry-del" title="Remove" onclick="deleteIncomeEntry(${e.id})">×</button>
       </div>
     `).join('');
   }
   document.getElementById('income-modal-total').textContent = '$' + fmt(data.total);
+}
+
+async function saveIncomeEntry(id) {
+  const row = document.querySelector(`.income-entry-row[data-id="${id}"]`);
+  if (!row) return;
+  const label = row.querySelector('.income-entry-label-input').value.trim();
+  const amount = parseFloat(row.querySelector('.income-entry-amount-input').value);
+  if (isNaN(amount) || amount < 0) { toast('Enter a valid amount', true); await renderIncomeEntries(); return; }
+  await api(`/income/entries/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ amount, label }) });
+  await renderIncomeEntries();
+}
+
+async function saveIncomeTemplate() {
+  const data = await api(`/income/${state.currentMonth}/save-template`, { method: 'POST' });
+  toast(`Saved ${data.count} income source${data.count !== 1 ? 's' : ''} as the default for new months`);
 }
 
 async function addIncomeEntry() {
@@ -313,13 +328,43 @@ function closeIncomeModal() {
   loadDashboard();
 }
 
-async function editSavings() {
-  const val = prompt(`Set savings goal for ${formatMonth(state.currentMonth)}:`, state.dashboard?.savings_target || 0);
-  if (val === null || val.trim() === '') return;
-  const amount = parseFloat(val);
-  if (isNaN(amount) || amount < 0) { toast('Invalid amount', true); return; }
+function editSavings() {
+  document.getElementById('savings-modal-month').textContent = formatMonth(state.currentMonth);
+  const input = document.getElementById('savings-modal-input');
+  input.value = state.dashboard?.savings_target ?? '';
+  document.getElementById('savings-modal-overlay').classList.remove('hidden');
+  input.focus();
+}
+
+function closeSavingsModal() {
+  document.getElementById('savings-modal-overlay').classList.add('hidden');
+}
+
+async function saveSavingsModal() {
+  const amount = parseFloat(document.getElementById('savings-modal-input').value);
+  if (isNaN(amount) || amount < 0) { toast('Enter a valid amount', true); return; }
   await api(`/savings/${state.currentMonth}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ savings_target: amount }) });
+  closeSavingsModal();
   await loadDashboard();
+}
+
+// Custom confirm dialog — native confirm()/prompt() are blocked inside the HA ingress iframe.
+function appConfirm(message, okLabel = 'Delete') {
+  return new Promise(resolve => {
+    const overlay = document.getElementById('confirm-modal-overlay');
+    document.getElementById('confirm-modal-message').textContent = message;
+    const okBtn = document.getElementById('confirm-ok-btn');
+    const cancelBtn = document.getElementById('confirm-cancel-btn');
+    okBtn.textContent = okLabel;
+    const cleanup = () => {
+      overlay.classList.add('hidden');
+      okBtn.onclick = null;
+      cancelBtn.onclick = null;
+    };
+    okBtn.onclick = () => { cleanup(); resolve(true); };
+    cancelBtn.onclick = () => { cleanup(); resolve(false); };
+    overlay.classList.remove('hidden');
+  });
 }
 
 async function toggleBillPaid(billId) {
@@ -489,7 +534,7 @@ function updateBulkDeleteButton() {
 async function deleteSelected() {
   const ids = [...state.selectedIds];
   if (!ids.length) return;
-  if (!confirm(`Delete ${ids.length} transaction${ids.length !== 1 ? 's' : ''}?`)) return;
+  if (!(await appConfirm(`Delete ${ids.length} transaction${ids.length !== 1 ? 's' : ''}?`))) return;
   await api('/transactions/bulk', {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
@@ -525,7 +570,7 @@ async function updateNotes(id, notes) {
 }
 
 async function deleteTransaction(id) {
-  if (!confirm('Delete this transaction?')) return;
+  if (!(await appConfirm('Delete this transaction?'))) return;
   await api(`/transactions/${id}`, { method: 'DELETE' });
   state.allTransactions = state.allTransactions.filter(t => t.id !== id);
   state.selectedIds.delete(id);
@@ -696,7 +741,7 @@ async function applyBillMatching(silent = false) {
 }
 
 async function deleteBill(id) {
-  if (!confirm('Delete this bill?')) return;
+  if (!(await appConfirm('Delete this bill?'))) return;
   await api(`/bills/${id}`, { method: 'DELETE' });
   await loadBills();
   await loadDashboard();
@@ -747,7 +792,7 @@ async function addCategoryRule(e) {
 }
 
 async function deleteCategoryRule(id) {
-  if (!confirm('Delete this rule?')) return;
+  if (!(await appConfirm('Delete this rule?'))) return;
   await api(`/category-rules/${id}`, { method: 'DELETE' });
   await loadCategoryRules();
 }

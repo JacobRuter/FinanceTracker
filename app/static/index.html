@@ -283,7 +283,7 @@
   <div id="income-modal-overlay" class="modal-overlay hidden" onclick="closeIncomeModal()">
     <div class="modal" onclick="event.stopPropagation()">
       <h3>Income — <span id="income-modal-month"></span></h3>
-      <p class="help-text">Add each income amount (e.g. a paycheck). The month's income is the total of all entries.</p>
+      <p class="help-text">Each income source (e.g. a paycheck) is a row — edit the label or amount inline. New months pre-fill from your saved default set. The month's income is the total of all rows.</p>
       <div id="income-entries-list"></div>
       <div class="edit-row-two">
         <div>
@@ -298,7 +298,35 @@
       <button type="button" class="btn-primary" onclick="addIncomeEntry()">Add income</button>
       <div class="income-total-row">Total income: <strong id="income-modal-total">$0.00</strong></div>
       <div class="modal-footer">
-        <button type="button" onclick="closeIncomeModal()">Done</button>
+        <button type="button" class="btn-ghost" onclick="saveIncomeTemplate()" title="Use this month's income rows as the default that pre-fills new months">Save as default for new months</button>
+        <button type="button" class="btn-primary" onclick="closeIncomeModal()">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Savings goal modal -->
+  <div id="savings-modal-overlay" class="modal-overlay hidden" onclick="closeSavingsModal()">
+    <div class="modal" onclick="event.stopPropagation()">
+      <h3>Savings Goal — <span id="savings-modal-month"></span></h3>
+      <div class="edit-row">
+        <label class="settings-label">Monthly savings goal ($)</label>
+        <input type="number" id="savings-modal-input" step="0.01" min="0" placeholder="0.00" onkeydown="if(event.key==='Enter')saveSavingsModal()">
+      </div>
+      <div class="modal-footer">
+        <button type="button" onclick="closeSavingsModal()">Cancel</button>
+        <button type="button" class="btn-primary" onclick="saveSavingsModal()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Generic confirm modal (native confirm() is blocked in the HA ingress iframe) -->
+  <div id="confirm-modal-overlay" class="modal-overlay hidden">
+    <div class="modal" onclick="event.stopPropagation()">
+      <h3 id="confirm-modal-title">Please confirm</h3>
+      <p id="confirm-modal-message" class="help-text"></p>
+      <div class="modal-footer">
+        <button type="button" id="confirm-cancel-btn">Cancel</button>
+        <button type="button" class="btn-primary" id="confirm-ok-btn">Delete</button>
       </div>
     </div>
   </div>
