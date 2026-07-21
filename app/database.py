@@ -35,7 +35,6 @@ def init_db():
                 source TEXT NOT NULL,
                 month_year TEXT NOT NULL,
                 notes TEXT DEFAULT '',
-                is_split INTEGER NOT NULL DEFAULT 0,
                 exclude_from_spending INTEGER NOT NULL DEFAULT 0
             );
 
@@ -92,7 +91,6 @@ def init_db():
     with get_db() as conn:
         for stmt in [
             "ALTER TABLE monthly_income ADD COLUMN savings_target REAL NOT NULL DEFAULT 0",
-            "ALTER TABLE transactions ADD COLUMN is_split INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE transactions ADD COLUMN exclude_from_spending INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE bills ADD COLUMN match_keyword TEXT",
         ]:
@@ -138,42 +136,11 @@ def get_transactions(month_year: str) -> list[dict]:
 def insert_transaction(tx: dict) -> int:
     with get_db() as conn:
         cur = conn.execute(
-            """INSERT INTO transactions (date, description, amount, type, category, source, month_year, notes, is_split)
-               VALUES (:date, :description, :amount, :type, :category, :source, :month_year, :notes, :is_split)""",
+            """INSERT INTO transactions (date, description, amount, type, category, source, month_year, notes)
+               VALUES (:date, :description, :amount, :type, :category, :source, :month_year, :notes)""",
             {**tx, 'notes': tx.get('notes', '')}
         )
         return cur.lastrowid
-
-
-def split_capital_one_transactions(month_year: str) -> int:
-    with get_db() as conn:
-        rows = conn.execute(
-            """SELECT id, amount FROM transactions
-               WHERE month_year = ? AND source = 'capital_one' AND type = 'expense' AND is_split = 0""",
-            (month_year,)
-        ).fetchall()
-        for r in rows:
-            conn.execute(
-                "UPDATE transactions SET amount = ?, is_split = 1 WHERE id = ?",
-                (round(r["amount"] / 2, 2), r["id"])
-            )
-        return len(rows)
-
-
-def unsplit_capital_one_transactions(month_year: str) -> int:
-    """Restore previously-split Capital One expenses by doubling them back to full amount."""
-    with get_db() as conn:
-        rows = conn.execute(
-            """SELECT id, amount FROM transactions
-               WHERE month_year = ? AND source = 'capital_one' AND type = 'expense' AND is_split = 1""",
-            (month_year,)
-        ).fetchall()
-        for r in rows:
-            conn.execute(
-                "UPDATE transactions SET amount = ?, is_split = 0 WHERE id = ?",
-                (round(r["amount"] * 2, 2), r["id"])
-            )
-        return len(rows)
 
 
 def update_transaction(tx_id: int, fields: dict):
@@ -288,6 +255,8 @@ def get_dashboard(month_year: str) -> dict:
             if paid:
                 bills_paid += 1
 
+        # Money actually saved this month = income - spending - bills (before the savings goal)
+        saved_this_month = income - total_spending - bills_total
         # Left over = income - spending - bills - savings
         net_after_savings = income - total_spending - bills_total - savings_target
         # Total spendable budget (income minus fixed obligations)
@@ -350,6 +319,7 @@ def get_dashboard(month_year: str) -> dict:
             "bills_paid": bills_paid,
             "bills_count": len(bills),
             "savings_target": round(savings_target, 2),
+            "saved_this_month": round(saved_this_month, 2),
             "net_after_savings": round(net_after_savings, 2),
             "total_spendable": round(total_spendable, 2),
             "categories": categories,
@@ -610,7 +580,8 @@ def get_annual_summary(year: int) -> dict:
             if my in entries_by_month:
                 income = entries_by_month[my]
             savings = (mi["savings_target"] or default_savings) if mi else default_savings
-            net = round(income - spending - bills_total - savings, 2)
+            # Net = actual amount saved (or overspent) at month end, before the savings goal
+            net = round(income - spending - bills_total, 2)
 
             months.append({
                 "month_year": my,

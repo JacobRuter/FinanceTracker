@@ -79,7 +79,7 @@ class TransactionCreate(BaseModel):
 @app.post("/api/transactions")
 def create_transaction(body: TransactionCreate):
     month_year = body.date[:7]
-    tx = {**body.model_dump(), 'month_year': month_year, 'is_split': 0}
+    tx = {**body.model_dump(), 'month_year': month_year}
     tx_id = db.insert_transaction(tx)
     db.apply_bill_matching(month_year)
     db.apply_category_rules(month_year)
@@ -120,7 +120,7 @@ def delete_transaction(tx_id: int):
 
 
 @app.post("/api/transactions/upload")
-async def upload_csv(file: UploadFile = File(...), split: bool = False, replace: bool = False):
+async def upload_csv(file: UploadFile = File(...), replace: bool = False):
     content = await file.read()
     text = content.decode("utf-8-sig")  # handle BOM from Excel exports
 
@@ -137,10 +137,6 @@ async def upload_csv(file: UploadFile = File(...), split: bool = False, replace:
         tx = parser(row)
         if tx is None:
             continue
-        tx["is_split"] = 0
-        if split and source == "capital_one" and tx["type"] == "expense":
-            tx["amount"] = round(tx["amount"] / 2, 2)
-            tx["is_split"] = 1
         parsed.append(tx)
 
     if not parsed:
@@ -165,7 +161,6 @@ async def upload_csv(file: UploadFile = File(...), split: bool = False, replace:
 
 class TransactionBatch(BaseModel):
     transactions: list[TransactionCreate]
-    split: bool = False
 
 
 @app.post("/api/transactions/batch")
@@ -173,28 +168,13 @@ def create_transactions_batch(body: TransactionBatch):
     months = set()
     for t in body.transactions:
         month_year = t.date[:7]
-        tx = {**t.model_dump(), 'month_year': month_year, 'is_split': 0}
-        if body.split and t.source == 'capital_one' and t.type == 'expense':
-            tx['amount'] = round(tx['amount'] / 2, 2)
-            tx['is_split'] = 1
+        tx = {**t.model_dump(), 'month_year': month_year}
         db.insert_transaction(tx)
         months.add(month_year)
     for month in months:
         db.apply_bill_matching(month)
         db.apply_category_rules(month)
     return {"count": len(body.transactions), "months": sorted(months)}
-
-
-@app.post("/api/transactions/{month_year}/split-capital-one")
-def split_capital_one(month_year: str):
-    count = db.split_capital_one_transactions(month_year)
-    return {"count": count}
-
-
-@app.post("/api/transactions/{month_year}/unsplit-capital-one")
-def unsplit_capital_one(month_year: str):
-    count = db.unsplit_capital_one_transactions(month_year)
-    return {"count": count}
 
 
 @app.post("/api/transactions/{month_year}/apply-bill-matching")
@@ -241,6 +221,27 @@ def detect_format(headers: list[str]):
     return None, None
 
 
+# Description fragments that identify a credit-side line as a card payment
+# (paying down the balance) rather than a merchant refund/return.
+_PAYMENT_KEYWORDS = (
+    "payment thank you",
+    "autopay",
+    "auto pay",
+    "online payment",
+    "mobile pymt",
+    "pymt",
+    "capital one mobile",
+    "capital one autopay",
+    "web payment",
+    "electronic payment",
+)
+
+
+def _looks_like_card_payment(description: str) -> bool:
+    d = description.lower()
+    return any(k in d for k in _PAYMENT_KEYWORDS)
+
+
 def parse_date(date_str: str) -> tuple[str, str]:
     date_str = date_str.strip()
     for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m/%d/%y"):
@@ -263,14 +264,22 @@ def parse_chase(row: dict) -> dict | None:
         amount_str = row.get("Amount", "0").strip().replace(",", "")
         amount = float(amount_str)
         category = row.get("Category", "Uncategorized").strip() or "Uncategorized"
+        raw_type = row.get("Type", "").strip().lower()
 
-        # Chase: negative = expense, positive = payment/credit
+        # Chase: negative = charge (expense), positive = credit.
+        # A credit is either a card payment (excluded from spending) or a
+        # refund/return, which must credit back against its category's spending.
         if amount < 0:
             tx_type = "expense"
             tx_amount = abs(amount)
-        else:
+        elif raw_type == "payment" or _looks_like_card_payment(description):
             tx_type = "payment"
             tx_amount = amount
+        else:
+            # Refund/return: store as a negative expense so it nets against
+            # the category and the monthly spending total.
+            tx_type = "expense"
+            tx_amount = -amount
 
         return {
             "date": date,
@@ -280,7 +289,6 @@ def parse_chase(row: dict) -> dict | None:
             "category": category,
             "source": "chase",
             "month_year": month_year,
-            "is_split": 0,
         }
     except (ValueError, KeyError):
         return None
@@ -303,8 +311,15 @@ def parse_capital_one(row: dict) -> dict | None:
             tx_type = "expense"
             tx_amount = float(debit_str)
         elif credit_str:
-            tx_type = "payment"
-            tx_amount = float(credit_str)
+            # A credit is either a card payment (excluded from spending) or a
+            # refund/return, which must credit back against its category.
+            if _looks_like_card_payment(description):
+                tx_type = "payment"
+                tx_amount = float(credit_str)
+            else:
+                # Refund/return: negative expense nets against the category.
+                tx_type = "expense"
+                tx_amount = -float(credit_str)
         else:
             return None
 
@@ -316,7 +331,6 @@ def parse_capital_one(row: dict) -> dict | None:
             "category": category,
             "source": "capital_one",
             "month_year": month_year,
-            "is_split": 0,
         }
     except (ValueError, KeyError):
         return None

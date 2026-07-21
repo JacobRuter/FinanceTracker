@@ -164,6 +164,8 @@ main {
 .summary-card .small-btn:hover { border-color: var(--primary); color: var(--primary); }
 .summary-card.positive .card-value { color: var(--green); }
 .summary-card.negative .card-value { color: var(--red); }
+.card-sub.pos { color: var(--green); font-weight: 600; }
+.card-sub.neg { color: var(--red); font-weight: 600; }
 
 /* Two column layout */
 .two-col {
@@ -947,6 +949,7 @@ tbody td { padding: 9px 14px; vertical-align: middle; }
 :root[data-theme="dark"] .merchant-row.selected:hover { background: #2f2c52; }
 :root[data-theme="dark"] .week-callout.ok { background: #102a1c; border-color: #1d5236; }
 :root[data-theme="dark"] .week-callout.over { background: #2a1417; border-color: #5c2227; }
+:root[data-theme="dark"] .week-row.current { background: #1e1b3a; }
 :root[data-theme="dark"] .apply-split-btn { background: #2a2752; color: #c7c4f5; border-color: #3d3a6e; }
 :root[data-theme="dark"] .apply-split-btn:hover { background: #34316a; }
 :root[data-theme="dark"] .bulk-delete-btn { background: #3a1d22; color: #fca5a5; border-color: #5c2227; }

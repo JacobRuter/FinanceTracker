@@ -128,8 +128,8 @@
                 <th>Income</th>
                 <th>Spending</th>
                 <th>Bills</th>
-                <th>Savings</th>
-                <th>Net</th>
+                <th>Goal</th>
+                <th>Net Saved</th>
               </tr>
             </thead>
             <tbody id="year-monthly-body"></tbody>
@@ -187,14 +187,6 @@
             <button class="btn-primary" onclick="saveDefaultSavings()">Save</button>
           </div>
         </div>
-      </div>
-      <div class="card" style="margin-top:1rem">
-        <h2>Capital One Split</h2>
-        <p class="help-text">Halves Capital One expense amounts (shared 50/50). This applies to the month selected in the bar above — turning it <strong>on</strong> splits that month's Capital One expenses, <strong>off</strong> restores them to full. New imports for that month follow this setting too.</p>
-        <label class="toggle-label split-toggle">
-          <input type="checkbox" id="split-capone" onchange="onSplitToggle(this.checked)">
-          Split Capital One 50/50
-        </label>
       </div>
       <div class="card" style="margin-top:1rem">
         <h2>Category Rules</h2>
@@ -339,15 +331,11 @@
         <div class="paste-source-row">
           <div>
             <label class="settings-label">Source</label>
-            <select id="paste-source" class="edit-select" onchange="onPasteSourceChange()">
+            <select id="paste-source" class="edit-select">
               <option value="chase">Chase</option>
               <option value="capital_one">Capital One</option>
             </select>
           </div>
-          <label id="paste-split-wrap" class="toggle-label hidden">
-            <input type="checkbox" id="paste-split">
-            Split 50/50
-          </label>
         </div>
         <textarea id="paste-textarea" class="paste-textarea"
           placeholder="Copy transactions from your bank's website and paste here…"></textarea>

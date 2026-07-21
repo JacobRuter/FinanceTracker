@@ -180,6 +180,11 @@ function renderDashboard() {
     <div class="card summary-card">
       <div class="card-label">Savings Goal</div>
       <div class="card-value savings-value">$${fmt(d.savings_target)}</div>
+      <div class="card-sub ${d.saved_this_month >= 0 ? 'pos' : 'neg'}">
+        ${d.saved_this_month >= 0
+          ? `Saved $${fmt(d.saved_this_month)} this month`
+          : `Over budget $${fmt(Math.abs(d.saved_this_month))}`}
+      </div>
       <button class="small-btn" onclick="editSavings()">Edit</button>
     </div>
     <div class="card summary-card ${d.net_after_savings >= 0 ? 'positive' : 'negative'}">
@@ -381,7 +386,6 @@ async function loadTransactions() {
     state.selectedIds.clear();
     filterTransactions();
     updateCategoryFilter();
-    updateApplySplitButton();
     updateBulkDeleteButton();
     updateApplyMatchingButton();
   } catch (e) {
@@ -481,7 +485,7 @@ function renderTransactions() {
       <td><input type="checkbox" class="row-check" onchange="toggleRowSelect(${t.id}, this.checked)" ${checked ? 'checked' : ''}></td>
       <td style="white-space:nowrap">${t.date}</td>
       <td class="desc-cell" title="${esc(t.description)}">${esc(t.description)}</td>
-      <td class="amount-cell ${t.type === 'payment' ? 'credit' : ''}">${t.type === 'payment' ? '+' : ''}$${fmt(t.amount)}</td>
+      <td class="amount-cell ${(t.type === 'payment' || t.amount < 0) ? 'credit' : ''}">${(t.type === 'payment' || t.amount < 0) ? '+' : ''}$${fmt(Math.abs(t.amount))}</td>
       <td>
         <select class="inline-select" onchange="updateCategory(${t.id}, this.value)">
           ${categoryOptions(t.category)}
@@ -544,7 +548,6 @@ async function deleteSelected() {
   state.selectedIds.clear();
   filterTransactions();
   updateCategoryFilter();
-  updateApplySplitButton();
   updateBulkDeleteButton();
   await loadDashboard();
   toast(`Deleted ${ids.length} transaction${ids.length !== 1 ? 's' : ''}`);
@@ -576,7 +579,6 @@ async function deleteTransaction(id) {
   state.selectedIds.delete(id);
   filterTransactions();
   updateCategoryFilter();
-  updateApplySplitButton();
   updateBulkDeleteButton();
   if (document.getElementById('tab-dashboard').classList.contains('active')) await loadDashboard();
 }
@@ -586,14 +588,12 @@ async function handleCSVUpload(input) {
   if (!file) return;
   const formData = new FormData();
   formData.append('file', file);
-  const split = document.getElementById('split-capone').checked;
   const replace = document.getElementById('replace-upload').checked;
   try {
-    const res = await fetch(`api/transactions/upload?split=${split}&replace=${replace}`, { method: 'POST', body: formData });
+    const res = await fetch(`api/transactions/upload?replace=${replace}`, { method: 'POST', body: formData });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || 'Upload failed');
     const notes = [
-      split && data.source === 'capital_one' ? '50/50 split' : '',
       replace ? 'replaced existing' : '',
     ].filter(Boolean).join(', ');
     toast(`Imported ${data.imported} transactions for ${formatMonth(data.month_year)}${notes ? ' (' + notes + ')' : ''}`);
@@ -607,23 +607,6 @@ async function handleCSVUpload(input) {
   input.value = '';
 }
 
-// ---- Capital One split (Settings toggle — acts on the selected month) ----
-
-async function onSplitToggle(checked) {
-  await api('/settings/capital_one_split', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: checked ? 1 : 0 }) });
-  const action = checked ? 'split-capital-one' : 'unsplit-capital-one';
-  const data = await api(`/transactions/${state.currentMonth}/${action}`, { method: 'POST' });
-  if (data.count === 0) {
-    toast(`No Capital One transactions to ${checked ? 'split' : 'restore'} for ${formatMonth(state.currentMonth)}`);
-  } else {
-    const verb = checked ? 'Split' : 'Restored';
-    toast(`${verb} ${data.count} Capital One transaction${data.count !== 1 ? 's' : ''} for ${formatMonth(state.currentMonth)}`);
-  }
-  await Promise.all([loadDashboard(), loadTransactions()]);
-}
-
-// The apply-split button moved to the Settings toggle; kept as a no-op for legacy callers.
-function updateApplySplitButton() {}
 
 // ---- Bills ----
 
@@ -800,14 +783,12 @@ async function deleteCategoryRule(id) {
 // ---- Settings ----
 
 async function loadDefaultSettings() {
-  const [incomeData, savingsData, splitData] = await Promise.all([
+  const [incomeData, savingsData] = await Promise.all([
     api('/settings/default_income'),
     api('/settings/default_savings'),
-    api('/settings/capital_one_split'),
   ]);
   if (incomeData.value !== null) document.getElementById('default-income').value = incomeData.value;
   if (savingsData.value !== null) document.getElementById('default-savings').value = savingsData.value;
-  if (splitData.value !== null) document.getElementById('split-capone').checked = splitData.value === 1;
 }
 
 async function saveDefaultIncome() {
@@ -868,11 +849,11 @@ function renderAnnualSummary() {
       <div class="card-value">$${fmt(d.total_bills)}</div>
     </div>
     <div class="card summary-card">
-      <div class="card-label">Total Saved</div>
+      <div class="card-label">Total Goal</div>
       <div class="card-value savings-value">$${fmt(d.total_savings)}</div>
     </div>
     <div class="card summary-card ${d.total_net >= 0 ? 'positive' : 'negative'}">
-      <div class="card-label">Net</div>
+      <div class="card-label">Net Saved</div>
       <div class="card-value">${d.total_net < 0 ? '-' : ''}$${fmt(Math.abs(d.total_net))}</div>
     </div>
   `;
@@ -1223,8 +1204,7 @@ async function saveModal() {
       }
       filterTransactions();
       updateCategoryFilter();
-      updateApplySplitButton();
-      await loadDashboard();
+        await loadDashboard();
       toast('Transaction updated');
     }
     closeModal();
@@ -1240,8 +1220,6 @@ const pasteState = { transactions: [] };
 function openPasteModal() {
   document.getElementById('paste-textarea').value = '';
   document.getElementById('paste-source').value = 'chase';
-  document.getElementById('paste-split').checked = false;
-  document.getElementById('paste-split-wrap').classList.add('hidden');
   document.getElementById('paste-preview').classList.add('hidden');
   document.getElementById('paste-import-btn').classList.add('hidden');
   pasteState.transactions = [];
@@ -1251,11 +1229,6 @@ function openPasteModal() {
 
 function closePasteModal() {
   document.getElementById('paste-modal-overlay').classList.add('hidden');
-}
-
-function onPasteSourceChange() {
-  const isCapOne = document.getElementById('paste-source').value === 'capital_one';
-  document.getElementById('paste-split-wrap').classList.toggle('hidden', !isCapOne);
 }
 
 function parsePaste() {
@@ -1318,16 +1291,14 @@ function resetPaste() {
 async function importPasted() {
   const txs = pasteState.transactions;
   if (!txs.length) return;
-  const split = document.getElementById('paste-split').checked;
   try {
     const res = await api('/transactions/batch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ transactions: txs, split }),
+      body: JSON.stringify({ transactions: txs }),
     });
     closePasteModal();
-    const splitNote = split ? ' (50/50 split)' : '';
-    toast(`Imported ${res.count} transaction${res.count !== 1 ? 's' : ''}${splitNote}`);
+    toast(`Imported ${res.count} transaction${res.count !== 1 ? 's' : ''}`);
     if (res.months && res.months.length > 0) {
       const latestMonth = res.months[res.months.length - 1];
       state.currentMonth = latestMonth;
