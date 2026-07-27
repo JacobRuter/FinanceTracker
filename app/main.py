@@ -256,7 +256,10 @@ def parse_date(date_str: str) -> tuple[str, str]:
 def parse_chase(row: dict) -> dict | None:
     # Chase headers: Transaction Date, Post Date, Description, Category, Type, Amount, Memo
     try:
-        raw_date = row.get("Transaction Date", "").strip()
+        # Bucket by posted date so a statement export lands entirely in the
+        # month the bank posted it (prevents cross-month Replace deletions).
+        # Fall back to the transaction date if a row has no post date (pending).
+        raw_date = row.get("Post Date", "").strip() or row.get("Transaction Date", "").strip()
         if not raw_date:
             return None
         date, month_year = parse_date(raw_date)
@@ -297,7 +300,10 @@ def parse_chase(row: dict) -> dict | None:
 def parse_capital_one(row: dict) -> dict | None:
     # CapOne headers: Transaction Date, Posted Date, Card No., Description, Category, Debit, Credit
     try:
-        raw_date = row.get("Transaction Date", "").strip()
+        # Bucket by posted date so a statement export lands entirely in the
+        # month the bank posted it (prevents cross-month Replace deletions).
+        # Fall back to the transaction date if a row has no posted date (pending).
+        raw_date = row.get("Posted Date", "").strip() or row.get("Transaction Date", "").strip()
         if not raw_date:
             return None
         date, month_year = parse_date(raw_date)
