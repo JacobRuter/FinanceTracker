@@ -1459,19 +1459,30 @@ function _looksLikeCardPayment(description) {
   return _PAYMENT_KEYWORDS.some(k => d.includes(k));
 }
 
-// Does this paste sign its charges with a leading '-'? If so, an unsigned
-// amount is a credit; if not, every amount is a plain charge (older format).
+// Does this Chase paste sign its charges with a leading '-'? If so, an
+// unsigned amount is a credit; if not, every amount is a plain charge
+// (older format). Only meaningful for Chase - see _isCreditAmount.
 function _signedAmountFormat(lines) {
   return lines.some(l => /^-\s*\$/.test(l));
+}
+
+// The two banks point the minus in opposite directions:
+//   Capital One   charge "$75.60"    credit "-$75.60"
+//   Chase         charge "-$75.60"   credit "+$75.60"
+// So the convention has to come from the source being pasted. Sniffing it
+// from the text reads a Capital One statement backwards the moment it
+// contains a single refund, flipping every charge on the page into a credit.
+function _isCreditAmount(sign, source, signedFormat) {
+  if (source === 'capital_one') return sign === '-';
+  return sign === '+' || (!sign && signedFormat);
 }
 
 // Map a displayed amount onto the app's storage convention: charges are
 // positive expenses, card payments are 'payment' (excluded from spending),
 // and refunds/returns are negative expenses so they net against their
 // category and the monthly total — same rules as the CSV parsers in main.py.
-function _pasteAmountFields(sign, value, description, signedFormat) {
-  const isCredit = sign === '+' || (!sign && signedFormat);
-  if (!isCredit) return { amount: value, type: 'expense' };
+function _pasteAmountFields(sign, value, description, source, signedFormat) {
+  if (!_isCreditAmount(sign, source, signedFormat)) return { amount: value, type: 'expense' };
   if (_looksLikeCardPayment(description)) return { amount: value, type: 'payment' };
   return { amount: -value, type: 'expense' };
 }
@@ -1507,7 +1518,7 @@ function parseChasePaste(text) {
         for (let k = 1; k < block.length; k++) {
           if (block[k] === block[k - 1] && block[k] !== block[0]) category = _mapChaseCategory(block[k]);
         }
-        const { amount, type } = _pasteAmountFields(amtMatch[1], value, description, signedFormat);
+        const { amount, type } = _pasteAmountFields(amtMatch[1], value, description, 'chase', signedFormat);
         transactions.push({ date: today, description, amount, type, source: 'chase', category, notes: 'Pending' });
       }
       lastAmtIdx = i;
@@ -1542,7 +1553,7 @@ function parseChasePaste(text) {
         for (let k = 1; k < block.length; k++) {
           if (block[k] === block[k - 1] && block[k] !== block[0]) category = _mapChaseCategory(block[k]);
         }
-        const { amount, type } = _pasteAmountFields(amt.sign, amt.value, description, signedFormat);
+        const { amount, type } = _pasteAmountFields(amt.sign, amt.value, description, 'chase', signedFormat);
         transactions.push({ date, description, amount, type, source: 'chase', category, notes: '' });
       }
     }
@@ -1596,7 +1607,7 @@ function parseCapOnePaste(text) {
       const r = _capOneBlock(lines, i, junk, cardRe, rewardsRe, monthRe, amountRe);
       if (r) {
         const today = now.toISOString().slice(0, 10);
-        const { amount, type } = _pasteAmountFields(r.sign, r.amount, r.description, signedFormat);
+        const { amount, type } = _pasteAmountFields(r.sign, r.amount, r.description, 'capital_one', signedFormat);
         transactions.push({ date: today, description: r.description, amount, type, source: 'capital_one', category: r.category, notes: 'Pending' });
         i = r.endIdx;
       }
@@ -1611,7 +1622,7 @@ function parseCapOnePaste(text) {
       i += 2;
       const r = _capOneBlock(lines, i, junk, cardRe, rewardsRe, monthRe, amountRe);
       if (r) {
-        const { amount, type } = _pasteAmountFields(r.sign, r.amount, r.description, signedFormat);
+        const { amount, type } = _pasteAmountFields(r.sign, r.amount, r.description, 'capital_one', signedFormat);
         transactions.push({ date, description: r.description, amount, type, source: 'capital_one', category: r.category, notes: '' });
         i = r.endIdx;
       }
@@ -1658,8 +1669,10 @@ function _mapCapOneCategory(cat) {
     'travel': 'Travel', 'entertainment': 'Entertainment',
     'health': 'Health & Fitness', 'medical': 'Health & Fitness',
     'personal': 'Personal Care', 'other': 'Other', 'streaming': 'Subscriptions',
-    'phone': 'Bills & Utilities', 'education': 'Other', 'insurance': 'Insurance',
-    'home': 'Home',
+    'phone': 'Bills & Utilities', 'phone/cable': 'Bills & Utilities',
+    'internet': 'Bills & Utilities', 'education': 'Other', 'insurance': 'Insurance',
+    'home': 'Home', 'airfare': 'Travel', 'lodging': 'Travel',
+    'car rental': 'Travel', 'health care': 'Health & Fitness',
   };
   return map[cat.toLowerCase()] || 'Uncategorized';
 }
