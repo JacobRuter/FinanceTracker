@@ -138,15 +138,17 @@
         </div>
         <div class="card">
           <h2>Merchants</h2>
+          <p class="card-hint">Different spellings of the same vendor are grouped automatically. Tick two rows to merge them by hand.</p>
           <div class="merchant-toolbar">
             <input type="text" id="merchant-search" class="merchant-search" placeholder="Search merchants…" oninput="filterMerchants()">
             <div id="rename-bar" class="rename-bar hidden">
               <span id="selected-merchant-count"></span>
-              <input type="text" id="rename-input" placeholder="Rename to…">
-              <button class="btn-primary" onclick="applyRename()">Rename</button>
+              <input type="text" id="rename-input" placeholder="Group name…" oninput="this.dataset.touched = '1'">
+              <button class="btn-primary" id="merge-btn" onclick="applyRename()">Merge</button>
               <button class="btn-ghost" onclick="clearMerchantSelection()">Clear</button>
             </div>
           </div>
+          <div id="merchant-suggestions" class="merchant-suggestions"></div>
           <div id="merchant-list" class="merchant-list"></div>
         </div>
       </div>

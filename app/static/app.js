@@ -22,8 +22,12 @@ const sortState = {
 const yearState = {
   currentYear: new Date().getFullYear(),
   data: null,
-  allMerchants: [],
-  selectedMerchants: new Set(),
+  allMerchants: [],      // merchant groups, as returned by /api/annual
+  shown: [],             // groups currently rendered (after search filtering)
+  selectedMerchants: new Set(),  // group keys
+  expandedMerchants: new Set(),  // groups showing their original spellings
+  suggestions: [],
+  suggestionsOpen: false,
 };
 
 function getCurrentMonth() {
@@ -813,7 +817,8 @@ async function loadAnnualSummary() {
   try {
     document.getElementById('year-display').textContent = yearState.currentYear;
     yearState.data = await api(`/annual/${yearState.currentYear}`);
-    yearState.allMerchants = yearState.data.merchants;
+    yearState.allMerchants = yearState.data.merchants || [];
+    yearState.suggestions = yearState.data.merchant_suggestions || [];
     yearState.selectedMerchants.clear();
     renderAnnualSummary();
   } catch (e) {
@@ -891,87 +896,209 @@ function goToMonth(month) {
 }
 
 // ---- Merchants ----
+// Merchants arrive pre-grouped from the API: "Kroger", "KROGER #445" and
+// "kroger" are one row. A group can hold several original spellings
+// ("variants"), which the row expands to show.
+
+function visibleMerchants() {
+  const q = document.getElementById('merchant-search').value.trim().toLowerCase();
+  if (!q) return yearState.allMerchants;
+  return yearState.allMerchants.filter(m =>
+    m.description.toLowerCase().includes(q) ||
+    m.variants.some(v => v.description.toLowerCase().includes(q))
+  );
+}
 
 function filterMerchants() {
-  const q = document.getElementById('merchant-search').value.toLowerCase();
-  const filtered = q
-    ? yearState.allMerchants.filter(m => m.description.toLowerCase().includes(q))
-    : yearState.allMerchants;
-  renderMerchants(filtered);
+  yearState.shown = visibleMerchants();
+  renderSuggestions();
+  renderMerchants(yearState.shown);
 }
 
 function renderMerchants(merchants) {
   const el = document.getElementById('merchant-list');
   if (!merchants || merchants.length === 0) {
     el.innerHTML = '<p class="empty">No merchants found.</p>';
+    updateRenameBar();
     return;
   }
 
-  el.innerHTML = merchants.map(m => {
-    const selected = yearState.selectedMerchants.has(m.description);
+  el.innerHTML = merchants.map((m, i) => {
+    const selected = yearState.selectedMerchants.has(m.key);
+    const expanded = yearState.expandedMerchants.has(m.key);
+    const variants = m.variant_count > 1
+      ? `<button class="merchant-variants-btn" onclick="toggleMerchantVariants(${i})"
+           title="Show the original descriptions">${m.variant_count} spellings ${expanded ? '▾' : '▸'}</button>`
+      : '';
+    const merged = m.merged
+      ? `<button class="merchant-merged-tag" onclick="unmergeMerchant(${i})"
+           title="Undo this merge">merged ✕</button>`
+      : '';
+    const variantList = expanded
+      ? `<div class="merchant-variant-list">${m.variants.map(v => `
+          <div class="merchant-variant">
+            <span class="merchant-variant-name">${esc(v.description)}</span>
+            <span class="merchant-count">${v.count}×</span>
+            <span class="merchant-total">$${fmt(v.total)}</span>
+          </div>`).join('')}</div>`
+      : '';
+
     return `
-      <div class="merchant-row ${selected ? 'selected' : ''}">
-        <input type="checkbox" class="merchant-check" onchange="toggleMerchant('${esc(m.description)}', this.checked)" ${selected ? 'checked' : ''}>
-        <button class="merchant-name-btn" onclick="showMerchantTransactions('${esc(m.description)}')" title="View transactions">${esc(m.description)}</button>
-        <span class="merchant-count">${m.count}×</span>
-        <span class="merchant-total">$${fmt(m.total)}</span>
+      <div class="merchant-group ${selected ? 'selected' : ''}">
+        <div class="merchant-row">
+          <input type="checkbox" class="merchant-check" onchange="toggleMerchant(${i}, this.checked)" ${selected ? 'checked' : ''}>
+          <button class="merchant-name-btn" onclick="showMerchantTransactions(${i})" title="View transactions">${esc(m.description)}</button>
+          ${variants}${merged}
+          <span class="merchant-count">${m.count}×</span>
+          <span class="merchant-total">$${fmt(m.total)}</span>
+        </div>
+        ${variantList}
       </div>`;
   }).join('');
 
   updateRenameBar();
 }
 
-function toggleMerchant(description, checked) {
-  if (checked) yearState.selectedMerchants.add(description);
-  else yearState.selectedMerchants.delete(description);
-  updateRenameBar();
-  // Update row highlight without full re-render
-  const rows = document.querySelectorAll('.merchant-row');
-  rows.forEach(row => {
-    const name = row.querySelector('.merchant-name')?.textContent;
-    if (name) row.classList.toggle('selected', yearState.selectedMerchants.has(name));
-  });
+function toggleMerchantVariants(index) {
+  const m = yearState.shown[index];
+  if (!m) return;
+  if (yearState.expandedMerchants.has(m.key)) yearState.expandedMerchants.delete(m.key);
+  else yearState.expandedMerchants.add(m.key);
+  renderMerchants(yearState.shown);
+}
+
+function toggleMerchant(index, checked) {
+  const m = yearState.shown[index];
+  if (!m) return;
+  if (checked) yearState.selectedMerchants.add(m.key);
+  else yearState.selectedMerchants.delete(m.key);
+  renderMerchants(yearState.shown);
 }
 
 function updateRenameBar() {
   const bar = document.getElementById('rename-bar');
-  const count = yearState.selectedMerchants.size;
-  bar.classList.toggle('hidden', count === 0);
+  const keys = [...yearState.selectedMerchants];
+  bar.classList.toggle('hidden', keys.length === 0);
   document.getElementById('selected-merchant-count').textContent =
-    `${count} merchant${count !== 1 ? 's' : ''} selected`;
+    `${keys.length} merchant${keys.length !== 1 ? 's' : ''} selected`;
+
+  const btn = document.getElementById('merge-btn');
+  if (btn) btn.textContent = keys.length > 1 ? 'Merge' : 'Rename';
+
+  // Prefill with the busiest selected name, which is usually the one to keep.
+  const input = document.getElementById('rename-input');
+  if (input && !input.dataset.touched) {
+    const picked = yearState.allMerchants
+      .filter(m => yearState.selectedMerchants.has(m.key))
+      .sort((a, b) => b.count - a.count)[0];
+    input.value = picked ? picked.description : '';
+  }
 }
 
 function clearMerchantSelection() {
   yearState.selectedMerchants.clear();
-  document.getElementById('rename-input').value = '';
+  const input = document.getElementById('rename-input');
+  input.value = '';
+  delete input.dataset.touched;
   filterMerchants();
 }
 
 async function applyRename() {
-  const toName = document.getElementById('rename-input').value.trim();
-  if (!toName) { toast('Enter a new name', true); return; }
-  const fromNames = [...yearState.selectedMerchants];
-  if (fromNames.length === 0) return;
+  const input = document.getElementById('rename-input');
+  const toName = input.value.trim();
+  if (!toName) { toast('Enter a name', true); return; }
+  const keys = [...yearState.selectedMerchants];
+  if (keys.length === 0) return;
 
-  const data = await api('/merchants/rename', {
+  await api('/merchants/merge', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ from_names: fromNames, to_name: toName }),
+    body: JSON.stringify({ keys, name: toName }),
   });
 
-  toast(`Renamed ${data.count} transaction${data.count !== 1 ? 's' : ''} to "${toName}"`);
+  toast(keys.length > 1
+    ? `Merged ${keys.length} merchants into "${toName}"`
+    : `Renamed to "${toName}"`);
   yearState.selectedMerchants.clear();
-  document.getElementById('rename-input').value = '';
+  input.value = '';
+  delete input.dataset.touched;
   await loadAnnualSummary();
-  // Refresh transactions if viewing the same data
-  await loadTransactions();
-  if (document.getElementById('tab-dashboard').classList.contains('active')) await loadDashboard();
+}
+
+async function unmergeMerchant(index) {
+  const m = yearState.shown[index];
+  if (!m) return;
+  await api('/merchants/unmerge', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: m.key }),
+  });
+  toast(`Unmerged "${m.description}"`);
+  await loadAnnualSummary();
+}
+
+// ---- Suggested merges ----
+// Matches the automatic pass will not make on its own (a trailing city, a
+// squashed-together spelling), offered for one-click confirmation.
+
+function renderSuggestions() {
+  const el = document.getElementById('merchant-suggestions');
+  if (!el) return;
+  const list = yearState.suggestions || [];
+  if (list.length === 0) { el.innerHTML = ''; return; }
+
+  const open = yearState.suggestionsOpen;
+  el.innerHTML = `
+    <button class="suggestions-toggle" onclick="toggleSuggestions()">
+      ${open ? '▾' : '▸'} ${list.length} possible duplicate${list.length !== 1 ? 's' : ''} to review
+    </button>
+    ${open ? `<div class="suggestion-list">${list.map((s, i) => `
+      <div class="suggestion-row">
+        <div class="suggestion-names">
+          <strong>${esc(s.names[0])}</strong> <span class="suggestion-plus">+</span> <strong>${esc(s.names[1])}</strong>
+          <div class="suggestion-reason">${esc(s.reason)} · $${fmt(s.totals[0] + s.totals[1])} combined</div>
+        </div>
+        <button class="btn-primary btn-sm" onclick="acceptSuggestion(${i})">Merge as "${esc(s.suggested_name)}"</button>
+        <button class="btn-ghost btn-sm" onclick="dismissSuggestion(${i})">Not the same</button>
+      </div>`).join('')}</div>` : ''}
+  `;
+}
+
+function toggleSuggestions() {
+  yearState.suggestionsOpen = !yearState.suggestionsOpen;
+  renderSuggestions();
+}
+
+async function acceptSuggestion(index) {
+  const s = yearState.suggestions[index];
+  if (!s) return;
+  await api('/merchants/merge', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ keys: s.keys, name: s.suggested_name }),
+  });
+  toast(`Merged into "${s.suggested_name}"`);
+  await loadAnnualSummary();
+}
+
+async function dismissSuggestion(index) {
+  const s = yearState.suggestions[index];
+  if (!s) return;
+  await api('/merchants/dismiss-suggestion', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ keys: s.keys }),
+  });
+  await loadAnnualSummary();
 }
 
 // ---- Merchant transactions modal ----
 
-async function showMerchantTransactions(name) {
-  const data = await api(`/merchants/transactions?name=${encodeURIComponent(name)}&year=${yearState.currentYear}`);
+async function showMerchantTransactions(index) {
+  const m = yearState.shown[index];
+  if (!m) return;
+  const name = m.description;
+  const data = await api(`/merchants/transactions?key=${encodeURIComponent(m.key)}&year=${yearState.currentYear}`);
   const txs = data.transactions;
   const total = txs.reduce((s, t) => s + t.amount, 0);
 
@@ -986,13 +1113,14 @@ async function showMerchantTransactions(name) {
       <div class="merchant-tx-scroll">
         <table class="merchant-tx-table">
           <thead>
-            <tr><th>Date</th><th>Month</th><th>Amount</th><th>Category</th><th>Notes</th></tr>
+            <tr><th>Date</th><th>Month</th><th>Description</th><th>Amount</th><th>Category</th><th>Notes</th></tr>
           </thead>
           <tbody>
             ${txs.map(t => `
               <tr>
                 <td style="white-space:nowrap">${t.date}</td>
                 <td>${formatMonthShort(t.month_year)}</td>
+                <td style="color:var(--text-muted)">${esc(t.description)}</td>
                 <td class="amount-cell">$${fmt(t.amount)}</td>
                 <td>${esc(t.category)}</td>
                 <td style="color:var(--text-muted)">${esc(t.notes || '')}</td>
@@ -1257,8 +1385,8 @@ function renderPastePreview() {
     <tr>
       <td style="white-space:nowrap">${t.date}</td>
       <td class="desc-cell" title="${esc(t.description)}">${esc(t.description)}</td>
-      <td class="amount-cell">$${fmt(t.amount)}</td>
-      <td style="color:var(--text-muted);font-size:12px">${esc(t.notes || '')}</td>
+      <td class="amount-cell ${(t.type === 'payment' || t.amount < 0) ? 'credit' : ''}">${(t.type === 'payment' || t.amount < 0) ? '+' : ''}$${fmt(Math.abs(t.amount))}</td>
+      <td style="color:var(--text-muted);font-size:12px">${esc([t.notes, t.type === 'payment' ? 'Card payment' : (t.amount < 0 ? 'Refund' : '')].filter(Boolean).join(' · '))}</td>
       <td><button class="icon-btn delete" onclick="removePasteRow(${i})" title="Remove">×</button></td>
     </tr>`).join('');
 }
@@ -1315,10 +1443,44 @@ async function importPasted() {
 
 const _MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
+// Amount lines come in as "$115.06", "-$115.06" or "+$115.06".
+const _AMOUNT_RE = /^([-+])?\s*\$\s*([\d,]+\.\d{2})$/;
+
+// Mirrors _PAYMENT_KEYWORDS in main.py: description fragments that identify a
+// credit as a card payment (paying down the balance) rather than a refund.
+const _PAYMENT_KEYWORDS = [
+  'payment thank you', 'autopay', 'auto pay', 'online payment', 'mobile pymt',
+  'pymt', 'capital one mobile', 'capital one autopay', 'web payment',
+  'electronic payment',
+];
+
+function _looksLikeCardPayment(description) {
+  const d = (description || '').toLowerCase();
+  return _PAYMENT_KEYWORDS.some(k => d.includes(k));
+}
+
+// Does this paste sign its charges with a leading '-'? If so, an unsigned
+// amount is a credit; if not, every amount is a plain charge (older format).
+function _signedAmountFormat(lines) {
+  return lines.some(l => /^-\s*\$/.test(l));
+}
+
+// Map a displayed amount onto the app's storage convention: charges are
+// positive expenses, card payments are 'payment' (excluded from spending),
+// and refunds/returns are negative expenses so they net against their
+// category and the monthly total — same rules as the CSV parsers in main.py.
+function _pasteAmountFields(sign, value, description, signedFormat) {
+  const isCredit = sign === '+' || (!sign && signedFormat);
+  if (!isCredit) return { amount: value, type: 'expense' };
+  if (_looksLikeCardPayment(description)) return { amount: value, type: 'payment' };
+  return { amount: -value, type: 'expense' };
+}
+
 function parseChasePaste(text) {
   const dateRe = new RegExp(`^(${_MONTHS.join('|')})\\s+(\\d{1,2}),\\s+(\\d{4})$`);
-  const amountRe = /^\$([\d,]+\.\d{2})$/;
+  const amountRe = _AMOUNT_RE;
   const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+  const signedFormat = _signedAmountFormat(lines);
   const transactions = [];
 
   // Chase pastes have two zones:
@@ -1336,7 +1498,7 @@ function parseChasePaste(text) {
   for (let i = 0; i < pendingLines.length; i++) {
     const amtMatch = pendingLines[i].match(amountRe);
     if (amtMatch) {
-      const amount = parseFloat(amtMatch[1].replace(/,/g, ''));
+      const value = parseFloat(amtMatch[2].replace(/,/g, ''));
       const block = pendingLines.slice(lastAmtIdx + 1, i)
         .filter(l => l.length <= 70 && !/^pending/i.test(l));
       if (block.length > 0) {
@@ -1345,7 +1507,8 @@ function parseChasePaste(text) {
         for (let k = 1; k < block.length; k++) {
           if (block[k] === block[k - 1] && block[k] !== block[0]) category = _mapChaseCategory(block[k]);
         }
-        transactions.push({ date: today, description, amount, type: 'expense', source: 'chase', category, notes: 'Pending' });
+        const { amount, type } = _pasteAmountFields(amtMatch[1], value, description, signedFormat);
+        transactions.push({ date: today, description, amount, type, source: 'chase', category, notes: 'Pending' });
       }
       lastAmtIdx = i;
     }
@@ -1359,23 +1522,28 @@ function parseChasePaste(text) {
       const month = _MONTHS.indexOf(dateMatch[1]) + 1;
       const date = `${dateMatch[3]}-${String(month).padStart(2,'0')}-${dateMatch[2].padStart(2,'0')}`;
       const block = [];
-      let amount = null;
+      let amt = null;
       let j = i + 1;
       while (j < postedLines.length) {
         const line = postedLines[j];
         if (line.match(dateRe)) break;
         const amtMatch = line.match(amountRe);
-        if (amtMatch) { amount = parseFloat(amtMatch[1].replace(/,/g, '')); i = j; break; }
+        if (amtMatch) {
+          amt = { sign: amtMatch[1], value: parseFloat(amtMatch[2].replace(/,/g, '')) };
+          i = j;
+          break;
+        }
         block.push(line);
         j++;
       }
-      if (block.length > 0 && amount !== null) {
+      if (block.length > 0 && amt !== null) {
         const description = _cleanChaseDesc(block[0]);
         let category = 'Uncategorized';
         for (let k = 1; k < block.length; k++) {
           if (block[k] === block[k - 1] && block[k] !== block[0]) category = _mapChaseCategory(block[k]);
         }
-        transactions.push({ date, description, amount, type: 'expense', source: 'chase', category, notes: '' });
+        const { amount, type } = _pasteAmountFields(amt.sign, amt.value, description, signedFormat);
+        transactions.push({ date, description, amount, type, source: 'chase', category, notes: '' });
       }
     }
     i++;
@@ -1403,7 +1571,7 @@ function _mapChaseCategory(cat) {
 
 function parseCapOnePaste(text) {
   const monthRe = new RegExp(`^(${_MONTHS.join('|')})$`);
-  const amountRe = /^\$([\d,]+\.\d{2})$/;
+  const amountRe = _AMOUNT_RE;
   const cardRe = /.+\.\.\.\d{4}$/;
   const rewardsRe = /^\d+x /i;
   const junk = new Set([
@@ -1413,6 +1581,7 @@ function parseCapOnePaste(text) {
   ]);
 
   const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+  const signedFormat = _signedAmountFormat(lines);
   const transactions = [];
   const now = new Date();
   const curYear = now.getFullYear();
@@ -1427,7 +1596,8 @@ function parseCapOnePaste(text) {
       const r = _capOneBlock(lines, i, junk, cardRe, rewardsRe, monthRe, amountRe);
       if (r) {
         const today = now.toISOString().slice(0, 10);
-        transactions.push({ date: today, description: r.description, amount: r.amount, type: 'expense', source: 'capital_one', category: r.category, notes: 'Pending' });
+        const { amount, type } = _pasteAmountFields(r.sign, r.amount, r.description, signedFormat);
+        transactions.push({ date: today, description: r.description, amount, type, source: 'capital_one', category: r.category, notes: 'Pending' });
         i = r.endIdx;
       }
       continue;
@@ -1441,7 +1611,8 @@ function parseCapOnePaste(text) {
       i += 2;
       const r = _capOneBlock(lines, i, junk, cardRe, rewardsRe, monthRe, amountRe);
       if (r) {
-        transactions.push({ date, description: r.description, amount: r.amount, type: 'expense', source: 'capital_one', category: r.category, notes: '' });
+        const { amount, type } = _pasteAmountFields(r.sign, r.amount, r.description, signedFormat);
+        transactions.push({ date, description: r.description, amount, type, source: 'capital_one', category: r.category, notes: '' });
         i = r.endIdx;
       }
       continue;
@@ -1456,13 +1627,15 @@ function _capOneBlock(lines, startIdx, junk, cardRe, rewardsRe, monthRe, amountR
   let description = null;
   let category = null;
   let amount = null;
+  let sign = null;
   let j = startIdx;
 
   while (j < lines.length) {
     const line = lines[j];
     const amtMatch = line.match(amountRe);
     if (amtMatch) {
-      amount = parseFloat(amtMatch[1].replace(/,/g, ''));
+      sign = amtMatch[1];
+      amount = parseFloat(amtMatch[2].replace(/,/g, ''));
       j++;
       break;
     }
@@ -1474,7 +1647,7 @@ function _capOneBlock(lines, startIdx, junk, cardRe, rewardsRe, monthRe, amountR
   }
 
   return (description && amount !== null)
-    ? { description, category: category || 'Uncategorized', amount, endIdx: j }
+    ? { description, category: category || 'Uncategorized', amount, sign, endIdx: j }
     : null;
 }
 

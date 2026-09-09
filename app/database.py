@@ -1,6 +1,8 @@
 import calendar
 import sqlite3
 import os
+
+import merchants
 from contextlib import contextmanager
 from datetime import date
 
@@ -78,6 +80,17 @@ def init_db():
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS merchant_aliases (
+                norm_key TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS merchant_dismissals (
+                key_a TEXT NOT NULL,
+                key_b TEXT NOT NULL,
+                PRIMARY KEY (key_a, key_b)
             );
 
             CREATE TABLE IF NOT EXISTS category_rules (
@@ -600,13 +613,19 @@ def get_annual_summary(year: int) -> dict:
                 totals["savings"] += savings
                 totals["net"] += net
 
-        # Merchants (expense transactions for the year, excluding bill-matched)
+        # Merchants (expense transactions for the year, excluding bill-matched).
+        # Raw descriptions are collapsed into vendor groups so "Kroger",
+        # "KROGER #445" and "kroger" read as one merchant.
         merchant_rows = conn.execute(
             """SELECT description, COUNT(*) as count, ROUND(SUM(amount), 2) as total
                FROM transactions WHERE month_year LIKE ? AND type='expense' AND exclude_from_spending = 0
                GROUP BY description ORDER BY total DESC""",
             (year_prefix,)
         ).fetchall()
+        merchant_groups = merchants.group_merchants(
+            [dict(r) for r in merchant_rows], _alias_map(conn)
+        )
+        suggestions = merchants.suggest_merges(merchant_groups, _dismissed_pairs(conn))
 
         return {
             "year": year,
@@ -616,23 +635,103 @@ def get_annual_summary(year: int) -> dict:
             "total_bills": round(totals["bills"], 2),
             "total_savings": round(totals["savings"], 2),
             "total_net": round(totals["net"], 2),
-            "merchants": [dict(r) for r in merchant_rows],
+            "merchants": merchant_groups,
+            "merchant_suggestions": suggestions,
         }
 
 
-def get_merchant_transactions(name: str, year: int | None = None) -> list[dict]:
+def _alias_map(conn) -> dict[str, str]:
+    """norm_key -> user-chosen group name."""
+    rows = conn.execute("SELECT norm_key, display_name FROM merchant_aliases").fetchall()
+    return {r["norm_key"]: r["display_name"] for r in rows}
+
+
+def _dismissed_pairs(conn) -> set:
+    rows = conn.execute("SELECT key_a, key_b FROM merchant_dismissals").fetchall()
+    return {frozenset((r["key_a"], r["key_b"])) for r in rows}
+
+
+def _group_members(conn, group_keys: list[str]) -> tuple[list[str], list[str]]:
+    """Resolve group keys to the (descriptions, norm_keys) they cover."""
+    alias_map = _alias_map(conn)
+    wanted = set(group_keys)
+    rows = conn.execute("SELECT DISTINCT description FROM transactions").fetchall()
+    descriptions, keys = [], set()
+    for r in rows:
+        desc = r["description"]
+        if merchants.group_key(desc, alias_map) in wanted:
+            descriptions.append(desc)
+            keys.add(merchants.norm_key(desc))
+    return descriptions, sorted(keys)
+
+
+def get_merchant_transactions(name: str, year: int | None = None,
+                              group_key: str | None = None) -> list[dict]:
+    """Transactions for a merchant - a whole group when `group_key` is given,
+    otherwise the single exact description."""
     with get_db() as conn:
-        if year:
-            rows = conn.execute(
-                """SELECT * FROM transactions WHERE description = ? AND month_year LIKE ? AND type = 'expense'
-                   ORDER BY date DESC""",
-                (name, f"{year}-%")
-            ).fetchall()
+        if group_key:
+            names, _ = _group_members(conn, [group_key])
         else:
-            rows = conn.execute(
-                "SELECT * FROM transactions WHERE description = ? AND type = 'expense' ORDER BY date DESC",
-                (name,)
-            ).fetchall()
+            names = [name]
+        if not names:
+            return []
+        placeholders = ",".join("?" * len(names))
+        params = [*names]
+        sql = f"SELECT * FROM transactions WHERE description IN ({placeholders}) AND type = 'expense'"
+        if year:
+            sql += " AND month_year LIKE ?"
+            params.append(f"{year}-%")
+        rows = conn.execute(sql + " ORDER BY date DESC", params).fetchall()
+        return [dict(r) for r in rows]
+
+
+def merge_merchant_groups(group_keys: list[str], to_name: str) -> int:
+    """Point every norm_key in these groups at one display name.
+
+    Non-destructive: transaction descriptions are untouched, so a merge can be
+    undone and the original bank text is never lost.
+    """
+    to_name = to_name.strip()
+    if not to_name or not group_keys:
+        return 0
+    with get_db() as conn:
+        _, keys = _group_members(conn, group_keys)
+        for key in keys:
+            conn.execute(
+                """INSERT INTO merchant_aliases (norm_key, display_name) VALUES (?, ?)
+                   ON CONFLICT(norm_key) DO UPDATE SET display_name = excluded.display_name""",
+                (key, to_name)
+            )
+        return len(keys)
+
+
+def unmerge_merchant_group(group_key: str) -> int:
+    """Drop the user alias for a group, restoring automatic grouping."""
+    with get_db() as conn:
+        _, keys = _group_members(conn, [group_key])
+        if not keys:
+            return 0
+        placeholders = ",".join("?" * len(keys))
+        result = conn.execute(
+            f"DELETE FROM merchant_aliases WHERE norm_key IN ({placeholders})", keys
+        )
+        return result.rowcount
+
+
+def dismiss_merchant_suggestion(key_a: str, key_b: str):
+    a, b = sorted([key_a, key_b])
+    with get_db() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO merchant_dismissals (key_a, key_b) VALUES (?, ?)", (a, b)
+        )
+
+
+def get_merchant_aliases() -> list[dict]:
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT norm_key, display_name FROM merchant_aliases ORDER BY display_name, norm_key"
+        ).fetchall()
         return [dict(r) for r in rows]
 
 

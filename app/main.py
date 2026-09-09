@@ -202,14 +202,56 @@ class MerchantRename(BaseModel):
 
 
 @app.get("/api/merchants/transactions")
-def merchant_transactions(name: str, year: int = None):
-    return {"transactions": db.get_merchant_transactions(name, year)}
+def merchant_transactions(name: str = "", year: int = None, key: str = ""):
+    """Transactions for a merchant group (`key`), or one exact description."""
+    txs = db.get_merchant_transactions(name, year, group_key=key or None)
+    return {"transactions": txs}
 
 
 @app.post("/api/merchants/rename")
 def rename_merchants(body: MerchantRename):
+    """Legacy: rewrites the stored descriptions. Prefer /api/merchants/merge."""
     count = db.rename_merchants(body.from_names, body.to_name)
     return {"count": count}
+
+
+class MerchantMerge(BaseModel):
+    keys: list[str]
+    name: str
+
+
+@app.post("/api/merchants/merge")
+def merge_merchants(body: MerchantMerge):
+    """Group several merchants under one name without touching transactions."""
+    count = db.merge_merchant_groups(body.keys, body.name)
+    return {"count": count}
+
+
+class MerchantKey(BaseModel):
+    key: str
+
+
+@app.post("/api/merchants/unmerge")
+def unmerge_merchant(body: MerchantKey):
+    count = db.unmerge_merchant_group(body.key)
+    return {"count": count}
+
+
+class SuggestionDismiss(BaseModel):
+    keys: list[str]
+
+
+@app.post("/api/merchants/dismiss-suggestion")
+def dismiss_suggestion(body: SuggestionDismiss):
+    if len(body.keys) != 2:
+        raise HTTPException(400, "Expected exactly two merchant keys")
+    db.dismiss_merchant_suggestion(body.keys[0], body.keys[1])
+    return {"ok": True}
+
+
+@app.get("/api/merchants/aliases")
+def list_merchant_aliases():
+    return {"aliases": db.get_merchant_aliases()}
 
 
 def detect_format(headers: list[str]):
