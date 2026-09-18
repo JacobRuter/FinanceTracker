@@ -17,7 +17,7 @@ STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
 @app.on_event("startup")
 def startup():
-    os.makedirs("/data", exist_ok=True)
+    os.makedirs(os.path.dirname(db.DB_PATH) or ".", exist_ok=True)
     db.init_db()
 
 
