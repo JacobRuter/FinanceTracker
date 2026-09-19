@@ -1,8 +1,17 @@
+# Finance Tracker - pulls the prebuilt image from GitHub Container Registry.
+# Portainer: Stacks -> Add stack -> Web editor -> paste this -> Deploy.
 services:
-  app:
-    build: .
+  finance-tracker:
+    image: ghcr.io/jacobruter/financetracker:latest
+    container_name: finance-tracker
     ports:
-      - "8090:8080"
+      - "${PORT:-8090}:8080"
+    environment:
+      TZ: ${TZ:-America/New_York}
+      DB_PATH: /data/finance.db
     volumes:
-      - ./data:/data
+      - finance-data:/data
     restart: unless-stopped
+
+volumes:
+  finance-data:
